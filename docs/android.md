@@ -29,8 +29,9 @@ system service is unavailable. It compares system-available memory and Android's
 signal with the client's resident memory; installed RAM is recorded separately and is never
 treated as free memory.
 
-As pressure rises, the guard temporarily lowers the active view distance, reduces sub-chunk
-requests and optional prediction work, and throttles mesh and lighting job admission. It also
+As pressure rises, the guard temporarily lowers the active view distance and internal 3D render
+resolution (the screen-space UI remains at native output resolution), reduces sub-chunk requests
+and optional prediction work, and throttles mesh and lighting job admission. It also
 tightens the pending terrain-upload byte limit, requests world workers to release reusable
 CPU scratch buffers after their current task, and selects a smaller worker/compilation profile
 on Android devices with up to 4 GiB of RAM. Existing world data, player state, saving and

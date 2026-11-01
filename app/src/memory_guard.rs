@@ -161,6 +161,30 @@ mod tests {
     }
 
     #[test]
+    fn internal_render_scale_cap_is_temporary_and_only_reduces_saved_scale() {
+        let mut runtime = Runtime::default();
+        assert_eq!(runtime.render_scale_cap(), None);
+        let moderate = SystemMemorySnapshot {
+            total_bytes: 4 << 30,
+            available_bytes: Some(700 << 20),
+            low_memory_threshold_bytes: Some(256 << 20),
+            low_memory: false,
+            process_resident_bytes: Some(700 << 20),
+        };
+        runtime.guard.observe(moderate);
+        assert_eq!(runtime.render_scale_cap(), Some(0.90));
+        assert_eq!(1.0_f32.min(runtime.render_scale_cap().unwrap()), 0.90);
+        assert_eq!(0.80_f32.min(runtime.render_scale_cap().unwrap()), 0.80);
+        let critical = SystemMemorySnapshot {
+            low_memory: true,
+            ..moderate
+        };
+        runtime.guard.observe(critical);
+        assert_eq!(runtime.render_scale_cap(), Some(0.60));
+        assert_eq!(0.80_f32.min(runtime.render_scale_cap().unwrap()), 0.60);
+    }
+
+    #[test]
     fn render_distance_cap_is_temporary_and_never_increases_preference() {
         let mut runtime = Runtime::default();
         assert_eq!(runtime.effective_render_distance(18), 18);
