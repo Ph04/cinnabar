@@ -43,11 +43,11 @@ final class StartupDiagnostics {
                     + "\n" + exit.getDescription() + "\n"
                     + "Process: " + exit.getProcessName() + " (" + exit.getPid() + ")\n"
                     + "Exit timestamp: " + exit.getTimestamp() + "\n\n"
-                    + javaCrashSection(activity)
+                    + javaCrashSection(activity, exit)
                     + "\n\n" + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
             AlertDialog dialog = new AlertDialog.Builder(activity)
                     .setTitle("@PRODUCT_NAME@ stopped unexpectedly")
-                    .setMessage("Save report puts this log and any Android crash trace in Downloads.\n\n" + details)
+                    .setMessage("Save report stores the logs and any Android crash trace in Downloads.\n\n" + details)
                     .setPositiveButton("Retry", (which, button) -> retry.run())
                     .setNegativeButton("Save report", null)
                     .setNeutralButton("Copy details", null)
@@ -71,9 +71,9 @@ final class StartupDiagnostics {
     }
 
     /** Includes the bounded Java exception saved before the previous process terminated. */
-    private static String javaCrashSection(Activity activity) {
-        String saved = JavaCrashCapture.readTail(
-                new File(activity.getFilesDir(), "data/logs/java-crash.log"));
+    private static String javaCrashSection(Activity activity, ApplicationExitInfo exit) {
+        String saved = JavaCrashCapture.readForExit(
+                new File(activity.getFilesDir(), "data/logs/java-crash.log"), exit.getTimestamp());
         return saved.isEmpty() ? "" : "\n\nSaved Java uncaught exception:\n" + saved;
     }
 

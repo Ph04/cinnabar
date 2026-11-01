@@ -53,6 +53,22 @@ final class JavaCrashCapture {
         if (temporary.exists()) temporary.delete();
     }
 
+    /** Returns this Java report only when its wall-clock capture belongs to the Android exit. */
+    static String readForExit(File file, long exitTimestamp) {
+        try (RandomAccessFile source = new RandomAccessFile(file, "r")) {
+            if (!"Java uncaught exception".equals(source.readLine())) return "";
+            String timestamp = source.readLine();
+            if (timestamp == null || !timestamp.startsWith("timestamp_ms=")) return "";
+            long captured = Long.parseLong(timestamp.substring("timestamp_ms=".length()));
+            long difference = captured >= exitTimestamp
+                    ? captured - exitTimestamp : exitTimestamp - captured;
+            if (difference > 120_000L) return "";
+            return readTail(file);
+        } catch (IOException | NumberFormatException error) {
+            return "";
+        }
+    }
+
     /** Reads only the newest bounded bytes and starts on a UTF-8 character boundary. */
     static String readTail(File file) {
         try (RandomAccessFile source = new RandomAccessFile(file, "r")) {
