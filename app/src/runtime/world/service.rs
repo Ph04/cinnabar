@@ -26,6 +26,8 @@ fn launch_world_service(
     client_world: Option<ResMut<ClientWorld>>,
     view: Option<Res<LocalViewPose>>,
     upload_budget: Option<Res<ChunkUploadBudget>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    memory_guard: Option<Res<crate::memory_guard::Runtime>>,
 ) {
     let (Some(mut slot), Some(mut client_world), Some(view), Some(upload_budget)) =
         (slot, client_world, view, upload_budget)
@@ -35,9 +37,27 @@ fn launch_world_service(
     let Some(stream) = client_world.stream.take() else {
         return;
     };
-    slot.service.launch(
+    #[cfg(not(target_arch = "wasm32"))]
+    let mesh_job_budget = memory_guard.as_deref().map_or(
+        upload_budget.max_per_frame,
+        |guard| guard.mesh_job_budget(upload_budget.max_per_frame),
+    );
+    #[cfg(target_arch = "wasm32")]
+    let mesh_job_budget = upload_budget.max_per_frame;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let light_job_budget = memory_guard.as_deref().map_or(
+        chunk_pipeline::WorldStream::DEFAULT_LIGHT_JOB_BUDGET,
+        |guard| guard.light_job_budget(chunk_pipeline::WorldStream::DEFAULT_LIGHT_JOB_BUDGET),
+    );
+    #[cfg(target_arch = "wasm32")]
+    let light_job_budget = chunk_pipeline::WorldStream::DEFAULT_LIGHT_JOB_BUDGET;
+
+    slot.service.launch_with_budgets(
         stream,
         view.eye_translation().to_array(),
+        mesh_job_budget,
+        light_job_budget,
         upload_budget.max_per_frame,
     );
 }
