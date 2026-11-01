@@ -11,17 +11,18 @@ public final class CinnabarApplication extends Application {
         super.onCreate();
         final File crashLog = new File(
                 new File(new File(getFilesDir(), "data"), "logs"), "java-crash.log");
+        final int processId = Process.myPid();
+        final String runtime = getPackageName()
+                + " pid=" + processId
+                + " Android=" + Build.VERSION.RELEASE
+                + " (API " + Build.VERSION.SDK_INT + ") "
+                + Build.MANUFACTURER + "/" + Build.MODEL;
         final Thread.UncaughtExceptionHandler previous =
                 Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override public void uncaughtException(Thread thread, Throwable error) {
-                String runtime = getPackageName()
-                        + " pid=" + Process.myPid()
-                        + " Android=" + Build.VERSION.RELEASE
-                        + " (API " + Build.VERSION.SDK_INT + ") "
-                        + Build.MANUFACTURER + "/" + Build.MODEL;
                 JavaCrashCapture.write(
-                        crashLog, thread, error, System.currentTimeMillis(), Process.myPid(), runtime);
+                        crashLog, thread, error, System.currentTimeMillis(), processId, runtime);
                 if (previous != null) {
                     previous.uncaughtException(thread, error);
                 } else {
