@@ -119,14 +119,14 @@ pub(crate) fn configure_world(app: &mut App) {
     // camera resolves.
     app.init_resource::<client_presentation::camera::VehicleLookFollow>()
         .add_systems(
-        Update,
-        crate::runtime::world::vehicle_look::follow_vehicle_look
-            .after(advance_local_physics)
-            .after(crate::runtime::network::advance_actor_motion)
-            .before(resolve_local_player_presentation),
-    )
-    .add_systems(
-        Update,
+            Update,
+            crate::runtime::world::vehicle_look::follow_vehicle_look
+                .after(advance_local_physics)
+                .after(crate::runtime::network::advance_actor_motion)
+                .before(resolve_local_player_presentation),
+        )
+        .add_systems(
+            Update,
         (
             resolve_local_player_presentation,
             client_presentation::local_player_camera_receipt::begin_camera_publication_attempt,
