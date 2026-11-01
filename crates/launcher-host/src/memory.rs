@@ -30,7 +30,12 @@ pub fn render_distance_recommendation_bytes() -> u64 {
     let installed = physical_bytes();
     #[cfg(target_os = "android")]
     {
-        installed.min(2_u64 << 30)
+        const LOW_MEMORY_DEVICE_LIMIT: u64 = 4_u64 << 30;
+        if installed <= LOW_MEMORY_DEVICE_LIMIT {
+            installed.min(2_u64 << 30)
+        } else {
+            installed
+        }
     }
     #[cfg(not(target_os = "android"))]
     {

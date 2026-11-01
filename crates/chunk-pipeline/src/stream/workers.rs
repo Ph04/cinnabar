@@ -279,7 +279,10 @@ pub fn on_idle_world_cores<T: Send>(work: impl FnOnce() -> T + Send) -> T {
 /// Requests retained scratch release from every worker without interrupting running jobs.
 pub(super) fn request_scratch_reclaim() {
     scratch::request_reclaim();
-    WORKERS.shared.ready.notify_all();
+    // Do not initialize the lazy worker pool solely to reclaim buffers that do not exist yet.
+    if let Some(workers) = LazyLock::get(&WORKERS) {
+        workers.shared.ready.notify_all();
+    }
 }
 
 pub(super) static WORKERS: LazyLock<WorldPool> = LazyLock::new(|| {

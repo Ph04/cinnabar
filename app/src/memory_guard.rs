@@ -88,7 +88,7 @@ pub(crate) fn sample(
     }
 
     if current >= MemoryPressureLevel::High
-        && previous < MemoryPressureLevel::High
+        && current != previous
         && client_world
             .as_deref()
             .is_some_and(|world| world.stream.is_some())
