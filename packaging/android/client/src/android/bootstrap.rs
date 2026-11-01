@@ -294,6 +294,11 @@ fn clear_exception(env: &mut JNIEnv<'_>, activity: &JObject<'_>, stage: &str) {
             .ok()
         })
         .unwrap_or_else(|| "Java exception pending, but its stack trace could not be read".to_owned());
+    // Log.getStackTraceString can itself throw; clear that secondary exception before
+    // invoking the Java persistence callback on the same JNI environment.
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
     record_native_diagnostic(env, activity, stage, &details);
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_clear();
