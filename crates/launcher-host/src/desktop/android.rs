@@ -167,7 +167,7 @@ pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
     let mut env = vm.attach_current_thread().ok()?;
     // SAFETY: ndk-context publishes a live application Context for the process lifetime.
     let application = unsafe { JObject::from_raw(context.context().cast()) };
-    let result = (|| -> jni::errors::Result<(u64, u64, u64, bool)> {
+    let result = (|| -> jni::errors::Result<Option<(u64, u64, u64, bool)>> {
         let service_name = env.new_string("activity")?;
         let manager = env
             .call_method(
@@ -178,7 +178,7 @@ pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
             )?
             .l()?;
         if manager.is_null() {
-            return Err(jni::errors::Error::NullPtr("ActivityManager"));
+            return Ok(None);
         }
         let info = env.new_object("android/app/ActivityManager$MemoryInfo", "()V", &[])?;
         env.call_method(
@@ -191,14 +191,18 @@ pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
         let available = env.get_field(&info, "availMem", "J")?.j()?;
         let threshold = env.get_field(&info, "threshold", "J")?.j()?;
         let low_memory = env.get_field(&info, "lowMemory", "Z")?.z()?;
-        let total = u64::try_from(total).ok().filter(|bytes| *bytes > 0)
-            .ok_or(jni::errors::Error::NullPtr("ActivityManager.MemoryInfo.totalMem"))?;
+        let Ok(total) = u64::try_from(total) else {
+            return Ok(None);
+        };
+        if total == 0 {
+            return Ok(None);
+        }
         let available = u64::try_from(available).unwrap_or(0);
         let threshold = u64::try_from(threshold).unwrap_or(0);
-        Ok((total, available, threshold, low_memory))
+        Ok(Some((total, available, threshold, low_memory)))
     })();
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_clear();
     }
-    result.ok()
+    result.ok().flatten()
 }

@@ -215,7 +215,7 @@ impl MemoryPressureLevel {
         }
         match self {
             Self::Normal => requested,
-            Self::Moderate => (requested * 3 / 4).max(1),
+            Self::Moderate => (requested.saturating_mul(3) / 4).max(1),
             Self::High => (requested / 2).max(1),
             Self::Critical => (requested / 4).max(1),
         }
