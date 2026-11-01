@@ -118,7 +118,7 @@ pub(crate) fn configure_world(app: &mut App) {
     // Look following reads this frame's predicted and streamed vehicle headings before the
     // camera resolves.
     app.init_resource::<client_presentation::camera::VehicleLookFollow>()
-    .add_systems(
+        .add_systems(
         Update,
         crate::runtime::world::vehicle_look::follow_vehicle_look
             .after(advance_local_physics)

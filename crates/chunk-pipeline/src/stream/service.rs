@@ -31,7 +31,12 @@ impl WorldStream {
     ) -> (WorldStreamPoll, bool) {
         self.service_yield = Some(Arc::clone(yield_request));
         self.frame_deadline = Some(Instant::now() + SERVICE_SLICE);
-        let report = self.poll_with_budgets(camera_position, max_mesh_jobs, max_light_jobs, max_removal_jobs);
+        let report = self.poll_with_budgets(
+            camera_position,
+            max_mesh_jobs,
+            max_light_jobs,
+            max_removal_jobs,
+        );
         self.service_yield = None;
         // Commits, worker activity and queued publications all count as progress.
         // Only a slice that made none sleeps until a worker result can change that.
