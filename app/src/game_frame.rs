@@ -107,8 +107,7 @@ pub(crate) fn configure_world(app: &mut App) {
         send_movement_prediction_sync
             .after(advance_local_physics)
             .in_set(ClientFrameSet::NetworkSend),
-    )
-    ;
+    );
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(
         Update,

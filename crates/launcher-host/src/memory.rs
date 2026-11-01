@@ -89,7 +89,7 @@ pub fn system_memory_snapshot() -> Option<SystemMemorySnapshot> {
 /// Reads the kernel's byte-valued `hw.memsize` property.
 #[cfg(target_os = "macos")]
 fn read_physical_bytes() -> Option<u64> {
-    use std::ffi::{c_char, c_int, c_void};
+    use std::{ffi::{c_char, c_int, c_void}, mem::size_of};
     unsafe extern "C" {
         fn sysctlbyname(
             name: *const c_char,
