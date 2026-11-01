@@ -108,15 +108,17 @@ pub(crate) fn configure_world(app: &mut App) {
             .after(advance_local_physics)
             .in_set(ClientFrameSet::NetworkSend),
     )
-    .add_systems(
+    ;
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(
         Update,
         crate::render_distance::apply_render_distance
             .after(receive_network_events)
             .in_set(ClientFrameSet::NetworkSend),
-    )
+    );
     // Look following reads this frame's predicted and streamed vehicle headings before the
     // camera resolves.
-    .init_resource::<client_presentation::camera::VehicleLookFollow>()
+    app.init_resource::<client_presentation::camera::VehicleLookFollow>()
     .add_systems(
         Update,
         crate::runtime::world::vehicle_look::follow_vehicle_look
