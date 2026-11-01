@@ -157,7 +157,6 @@ fn pending_exception(env: &mut JNIEnv) -> Option<String> {
     None
 }
 
-
 /// Reads Android's current system memory headroom from ActivityManager.MemoryInfo.
 /// Returns (total, available, low-memory threshold, low-memory flag), in bytes.
 pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
