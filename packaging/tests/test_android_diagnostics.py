@@ -83,6 +83,9 @@ public final class DiagnosticsFixture {
                 || !StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED,
                         android.system.OsConstants.SIGKILL))
             throw new AssertionError("signal exit classification changed");
+        if (!StartupDiagnostics.exitCause(ApplicationExitInfo.REASON_SIGNALED,
+                android.system.OsConstants.SIGKILL).contains("memory pressure"))
+            throw new AssertionError("SIGKILL memory-pressure explanation missing");
         for (int reason : new int[] {ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
                 ApplicationExitInfo.REASON_ANOMALY, ApplicationExitInfo.REASON_FREEZER,
                 ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,

@@ -47,7 +47,10 @@ final class StartupDiagnostics {
                     + "\n" + exitCause(exit.getReason(), exit.getStatus())
                     + "\n" + exit.getDescription() + "\n"
                     + "Process: " + exit.getProcessName() + " (" + exit.getPid() + ")\n"
-                    + "Exit timestamp: " + exit.getTimestamp() + "\n\n"
+                    + "Exit timestamp: " + exit.getTimestamp() + "\n"
+                    + "Last sampled process memory: RSS=" + exit.getRss() + " kB, PSS=" + exit.getPss() + " kB\n"
+                    + "Android low-memory kill reporting supported: "
+                    + ActivityManager.isLowMemoryKillReportSupported() + "\n\n"
                     + javaCrashSection(activity, exit)
                     + caughtFailureSection(activity, "jni-errors.log", "Caught JNI exceptions")
                     + caughtFailureSection(activity, "bootstrap-errors.log", "Caught setup exceptions")
