@@ -21,7 +21,7 @@ public final class CinnabarApplication extends Application {
                         + " (API " + Build.VERSION.SDK_INT + ") "
                         + Build.MANUFACTURER + "/" + Build.MODEL;
                 JavaCrashCapture.write(
-                        crashLog, thread, error, System.currentTimeMillis(), runtime);
+                        crashLog, thread, error, System.currentTimeMillis(), Process.myPid(), runtime);
                 if (previous != null) {
                     previous.uncaughtException(thread, error);
                 } else {

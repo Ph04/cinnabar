@@ -118,7 +118,7 @@ public final class DiagnosticsFixture {
         File javaCrash = new File(args[0] + ".java-crash");
         String oversized = new String(new char[100000]).replace('\0', 'x');
         JavaCrashCapture.write(javaCrash, new Thread("java-crash-fixture"),
-                new RuntimeException(oversized), 123456789L, "fixture-device");
+                new RuntimeException(oversized), 123456789L, 12345, "fixture-device");
         byte[] persistedJava = Files.readAllBytes(javaCrash.toPath());
         String persistedJavaText = new String(persistedJava, StandardCharsets.UTF_8);
         if (persistedJava.length > 70 * 1024
@@ -130,18 +130,20 @@ public final class DiagnosticsFixture {
         if (javaTail.getBytes(StandardCharsets.UTF_8).length > JavaCrashCapture.MAX_TAIL_BYTES
                 || !javaTail.endsWith("[stack trace truncated]\n"))
             throw new AssertionError("Java crash tail was not bounded or complete");
-        if (JavaCrashCapture.readForExit(javaCrash, 123456789L).isEmpty()
-                || !JavaCrashCapture.readForExit(javaCrash, 123456789L + 120001L).isEmpty())
+        if (JavaCrashCapture.readForExit(javaCrash, 123456789L, 12345).isEmpty()
+                || !JavaCrashCapture.readForExit(javaCrash, 123456789L + 120001L, 12345).isEmpty()
+                || !JavaCrashCapture.readForExit(javaCrash, 123456789L, 12346).isEmpty())
             throw new AssertionError("Java report was not matched to its process exit");
         JavaCrashCapture.write(javaCrash, Thread.currentThread(),
-                new IllegalStateException("replacement Java cause"), 123456790L, "fixture-device");
+                new IllegalStateException("replacement Java cause"), 123456790L, 12345, "fixture-device");
         String replacementJava = new String(Files.readAllBytes(javaCrash.toPath()), StandardCharsets.UTF_8);
         if (!replacementJava.contains("replacement Java cause")
                 || replacementJava.contains("[stack trace truncated]")
                 || replacementJava.contains("xxxxxxxx"))
             throw new AssertionError("new Java exception did not replace the previous report");
-        if (!JavaCrashCapture.readForExit(javaCrash, 123456790L).contains("replacement Java cause")
-                || !JavaCrashCapture.readForExit(javaCrash, 123456789L + 120001L).isEmpty())
+        if (!JavaCrashCapture.readForExit(javaCrash, 123456790L, 12345).contains("replacement Java cause")
+                || !JavaCrashCapture.readForExit(javaCrash, 123456790L, 12346).isEmpty()
+                || !JavaCrashCapture.readForExit(javaCrash, 123456789L + 120001L, 12345).isEmpty())
             throw new AssertionError("stale Java exception was associated with a later process exit");
         if (new File(javaCrash.getParentFile(), javaCrash.getName() + ".tmp").exists())
             throw new AssertionError("temporary Java crash file was not cleaned up");

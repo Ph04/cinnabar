@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 
 /** Persists one bounded Java exception before Android's default handler terminates the process. */
 final class JavaCrashCapture {
-    static final int MAX_TAIL_BYTES = 32 * 1024;
+    static final int MAX_TAIL_BYTES = 70 * 1024;
     private static final int MAX_STACK_CHARS = 16 * 1024;
     private static final String TRUNCATION_MARKER = "\n[stack trace truncated]\n";
 
@@ -22,7 +22,7 @@ final class JavaCrashCapture {
      * the last complete report. This method deliberately avoids Android services and logging.
      */
     static synchronized void write(
-            File destination, Thread thread, Throwable failure, long timestamp, String runtime) {
+            File destination, Thread thread, Throwable failure, long timestamp, int processId, String runtime) {
         if (destination == null || thread == null || failure == null) return;
         File parent = destination.getParentFile();
         if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) return;
@@ -34,6 +34,7 @@ final class JavaCrashCapture {
             PrintWriter output = new PrintWriter(bounded);
             output.println("Java uncaught exception");
             output.println("timestamp_ms=" + timestamp);
+            output.println("process_id=" + processId);
             output.println("thread_name=" + thread.getName());
             output.println("thread_id=" + thread.getId());
             output.println("runtime=" + runtime);
@@ -54,11 +55,15 @@ final class JavaCrashCapture {
     }
 
     /** Returns this Java report only when its wall-clock capture belongs to the Android exit. */
-    static String readForExit(File file, long exitTimestamp) {
+    static String readForExit(File file, long exitTimestamp, int exitProcessId) {
         try (RandomAccessFile source = new RandomAccessFile(file, "r")) {
             if (!"Java uncaught exception".equals(source.readLine())) return "";
             String timestamp = source.readLine();
-            if (timestamp == null || !timestamp.startsWith("timestamp_ms=")) return "";
+            String process = source.readLine();
+            if (timestamp == null || !timestamp.startsWith("timestamp_ms=")
+                    || process == null || !process.startsWith("process_id=")) return "";
+            int capturedProcessId = Integer.parseInt(process.substring("process_id=".length()));
+            if (capturedProcessId != exitProcessId) return "";
             long captured = Long.parseLong(timestamp.substring("timestamp_ms=".length()));
             long difference = captured >= exitTimestamp
                     ? captured - exitTimestamp : exitTimestamp - captured;

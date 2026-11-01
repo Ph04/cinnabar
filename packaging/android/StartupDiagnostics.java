@@ -73,7 +73,8 @@ final class StartupDiagnostics {
     /** Includes the bounded Java exception saved before the previous process terminated. */
     private static String javaCrashSection(Activity activity, ApplicationExitInfo exit) {
         String saved = JavaCrashCapture.readForExit(
-                new File(activity.getFilesDir(), "data/logs/java-crash.log"), exit.getTimestamp());
+                new File(activity.getFilesDir(), "data/logs/java-crash.log"),
+                exit.getTimestamp(), exit.getPid());
         return saved.isEmpty() ? "" : "\n\nSaved Java uncaught exception:\n" + saved;
     }
 
