@@ -29,7 +29,30 @@ impl ThreadBudget {
     }
 
     fn current() -> Self {
-        Self::for_cores(chunk_pipeline::logical_cores())
+        let cores = chunk_pipeline::logical_cores();
+        #[cfg(target_os = "android")]
+        {
+            return Self::for_device(cores, launcher_host::memory::physical_bytes());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Self::for_cores(cores)
+        }
+    }
+
+    /// Low-RAM Android devices trade worker concurrency for a smaller allocation burst.
+    pub(crate) fn for_device(cores: usize, physical_memory_bytes: u64) -> Self {
+        const LOW_MEMORY_DEVICE_LIMIT: u64 = 4_u64 << 30;
+        let normal = Self::for_cores(cores);
+        if physical_memory_bytes == 0 || physical_memory_bytes > LOW_MEMORY_DEVICE_LIMIT {
+            return normal;
+        }
+        Self {
+            rayon: 1,
+            compute: normal.compute.min(2),
+            async_compute: 1,
+            io: 1,
+        }
     }
 
     pub(crate) fn task_pool_plugin() -> TaskPoolPlugin {
@@ -93,6 +116,27 @@ impl ThreadBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn low_memory_devices_use_a_smaller_compile_and_compute_budget() {
+        assert_eq!(
+            ThreadBudget::for_device(8, 4_u64 << 30),
+            ThreadBudget {
+                rayon: 1,
+                compute: 2,
+                async_compute: 1,
+                io: 1,
+            }
+        );
+        assert_eq!(
+            ThreadBudget::for_device(8, 6_u64 << 30),
+            ThreadBudget::for_cores(8)
+        );
+        assert_eq!(
+            ThreadBudget::for_device(8, 0),
+            ThreadBudget::for_cores(8)
+        );
+    }
 
     /// Shared pools stay small at every gate tier instead of scaling with the core count.
     #[test]

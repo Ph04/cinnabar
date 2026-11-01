@@ -224,7 +224,32 @@ const CORES_ENV: &str = "CINNABAR_CPU_CORES";
 #[cfg(not(target_arch = "wasm32"))]
 pub fn logical_cores() -> usize {
     let available = std::thread::available_parallelism().map_or(1, usize::from);
+    #[cfg(target_os = "android")]
+    let available = android_memory_limited_cores(available);
     capped_cores(available, std::env::var(CORES_ENV).ok().as_deref())
+}
+
+/// Uses a smaller native world pool on Android devices with at most 4 GiB installed RAM.
+#[cfg(target_os = "android")]
+fn android_memory_limited_cores(available: usize) -> usize {
+    const LOW_MEMORY_DEVICE_LIMIT: u64 = 4_u64 << 30;
+    let total_bytes = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|contents| {
+            let value = contents
+                .lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))?
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()?;
+            value.checked_mul(1024)
+        });
+    if total_bytes.is_some_and(|bytes| bytes <= LOW_MEMORY_DEVICE_LIMIT) {
+        available.min(6)
+    } else {
+        available
+    }
 }
 
 /// Applies a positive integer cap below `available`; anything else keeps `available`.
