@@ -58,6 +58,34 @@ async fn queued_connection_writes_in_acceptance_order_while_reading() {
     }
 }
 
+/// The native session writer limits accepted bytes, not just frame count, to two pack chunks.
+#[cfg(unix)]
+#[tokio::test]
+async fn native_session_queue_bounds_pending_bytes_and_releases_waiters() {
+    use futures::FutureExt;
+
+    let budget = super::NATIVE_QUEUE_BYTE_BUDGET;
+    assert_eq!(budget, crate::contract::PACK_CHUNK_BYTES * 2);
+    let (local, peer) = tokio::net::UnixStream::pair().unwrap();
+    let (_reader, queue) =
+        super::queued(crate::endpoint::PlatformStream::Unix(local), MAX_FRAME_LEN);
+    let chunk = Bytes::from(vec![7; crate::contract::PACK_CHUNK_BYTES]);
+    let first = queue.accept(chunk.clone()).await.unwrap();
+    let second = queue.accept(chunk.clone()).await.unwrap();
+    let mut waiting = Box::pin(queue.accept(chunk));
+    for _ in 0..8 {
+        assert!(
+            (&mut waiting).now_or_never().is_none(),
+            "a third resource-pack chunk must wait until accepted bytes are flushed"
+        );
+        tokio::task::yield_now().await;
+    }
+
+    drop(peer);
+    assert!(first.await.is_err());
+    assert!(second.await.is_err());
+    assert!(waiting.await.is_err());
+}
 /// A send completes only once its frame is flushed, and fails when the write does.
 #[cfg(unix)]
 #[tokio::test]

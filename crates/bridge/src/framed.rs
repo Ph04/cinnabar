@@ -127,6 +127,9 @@ impl FramedStream {
     }
 }
 
+/// Native reliable-frame writer budget: two 4 MiB resource-pack chunks.
+const NATIVE_QUEUE_BYTE_BUDGET: usize = crate::contract::PACK_CHUNK_BYTES * 2;
+
 /// Splits a fresh stream so a spawned writer task owns its write half.
 ///
 /// Requires a Tokio runtime. The writer exits once every [`FrameQueue`] clone is dropped.
@@ -134,7 +137,13 @@ impl FramedStream {
 pub(crate) fn queued(stream: PlatformStream, maximum: usize) -> (FramedReader, FrameQueue) {
     let (read, write) = stream.into_split();
     let trace_conn = crate::latency_trace::active().map(|_| Arc::new(AtomicU64::new(0)));
-    let (reader, frames, writer) = prepare_bounded(read, write, maximum, None, trace_conn);
+    let (reader, frames, writer) = prepare_bounded(
+        read,
+        write,
+        maximum,
+        Some(NATIVE_QUEUE_BYTE_BUDGET),
+        trace_conn,
+    );
     tokio::spawn(writer);
     (reader, frames)
 }
