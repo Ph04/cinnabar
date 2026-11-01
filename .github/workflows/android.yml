@@ -8,6 +8,16 @@ on:
     paths:
       - packaging/android/**
       - packaging/icons/**
+      - app/**
+      - crates/chunk-pipeline/**
+      - crates/client-shell/**
+      - crates/launcher-host/**
+      - crates/render-scene/**
+      - crates/render/**
+      - crates/render-api/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/android.yml
       - .github/workflows/package.yml
   schedule:
