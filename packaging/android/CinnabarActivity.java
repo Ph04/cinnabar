@@ -97,6 +97,11 @@ public final class CinnabarActivity extends NativeActivity {
         }
     }
 
+    /** Persists JNI callback failures originating from the native game thread. */
+    public void recordJniException(String stage, String details) {
+        RuntimeDiagnostics.recordText(this, "JNI/" + stage, details);
+    }
+
     /** Returns bottom system-window obstruction relative to the full native surface. */
     public int bottomObstructionPixels() {
         return bottomObstruction;
