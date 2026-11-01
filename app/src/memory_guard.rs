@@ -4,6 +4,7 @@ use bevy::{
     prelude::{Local, Res, ResMut, Resource, Time},
     time::Real,
 };
+use crate::runtime::world::ClientWorld;
 use launcher_host::memory::{MemoryGuard, MemoryPressureLevel, system_memory_snapshot};
 use std::time::Duration;
 
@@ -48,6 +49,7 @@ impl Runtime {
 pub(crate) fn sample(
     mut runtime: ResMut<Runtime>,
     time: Res<Time<Real>>,
+    client_world: Option<Res<ClientWorld>>,
     mut elapsed: Local<Duration>,
 ) {
     let first_sample = elapsed.is_zero();
@@ -64,6 +66,15 @@ pub(crate) fn sample(
     let current = runtime.guard.observe(snapshot);
     if current == previous {
         return;
+    }
+
+    if current >= MemoryPressureLevel::High
+        && previous < MemoryPressureLevel::High
+        && client_world
+            .as_deref()
+            .is_some_and(|world| world.stream.is_some())
+    {
+        chunk_pipeline::WorldStream::request_worker_scratch_reclaim();
     }
 
     let details = (

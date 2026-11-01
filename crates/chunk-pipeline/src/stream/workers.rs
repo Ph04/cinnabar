@@ -251,6 +251,12 @@ pub fn on_idle_world_cores<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     }
 }
 
+/// Requests retained scratch release from every worker without interrupting running jobs.
+pub(super) fn request_scratch_reclaim() {
+    scratch::request_reclaim();
+    WORKERS.shared.ready.notify_all();
+}
+
 pub(super) static WORKERS: LazyLock<WorldPool> = LazyLock::new(|| {
     #[cfg(not(target_arch = "wasm32"))]
     let cores = logical_cores();

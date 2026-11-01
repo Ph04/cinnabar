@@ -7,6 +7,11 @@ use {
 impl WorldStream {
     /// Full per-poll light dispatch budget used by the non-adaptive path.
     pub const DEFAULT_LIGHT_JOB_BUDGET: usize = LIGHT_DISPATCH_BUDGET_PER_POLL;
+
+    /// Requests all world workers to release retained CPU scratch after their current work.
+    pub fn request_worker_scratch_reclaim() {
+        workers::request_scratch_reclaim();
+    }
     /// Prioritizes the complete spawn columns and their light halo while entry is pending.
     pub fn set_startup_priority(&mut self, enabled: bool) {
         self.startup_priority = enabled;
