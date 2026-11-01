@@ -165,8 +165,20 @@ fn pending_exception(env: &mut JNIEnv) -> Option<String> {
 pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
     let context = ndk_context::android_context();
     // Android owns the VM and application context for the process lifetime.
-    let vm = unsafe { jni::JavaVM::from_raw(context.vm().cast()) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
+    let vm = match unsafe { jni::JavaVM::from_raw(context.vm().cast()) } {
+        Ok(vm) => vm,
+        Err(error) => {
+            log_memory_info_failure(&error.to_string());
+            return None;
+        }
+    };
+    let mut env = match vm.attach_current_thread() {
+        Ok(env) => env,
+        Err(error) => {
+            log_memory_info_failure(&error.to_string());
+            return None;
+        }
+    };
     // SAFETY: ndk-context publishes a live application Context for the process lifetime.
     let application = unsafe { JObject::from_raw(context.context().cast()) };
     let result = (|| -> jni::errors::Result<Option<(u64, u64, u64, bool)>> {
@@ -204,21 +216,30 @@ pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
         Ok(Some((total, available, threshold, low_memory)))
     })();
     match result {
-        Ok(snapshot) => snapshot,
+        Ok(Some(snapshot)) => Some(snapshot),
+        Ok(None) => {
+            log_memory_info_failure("ActivityManager returned no usable MemoryInfo snapshot");
+            None
+        }
         Err(error) => {
             let details = pending_stack_trace(&mut env).unwrap_or_else(|| error.to_string());
-            if !MEMORY_INFO_FAILURE_REPORTED.swap(true, Ordering::AcqRel) {
-                let bounded: String = details.chars().take(8192).collect();
-                tracing::warn!(
-                    cause = %bounded,
-                    "Android memory-info JNI sampling failed; memory guard will use procfs fallback"
-                );
-            }
+            log_memory_info_failure(&details);
             if env.exception_check().unwrap_or(false) {
                 let _ = env.exception_clear();
             }
             None
         }
+    }
+}
+
+/// Records only the first Android memory JNI failure; callers then use procfs as a fallback.
+fn log_memory_info_failure(details: &str) {
+    if !MEMORY_INFO_FAILURE_REPORTED.swap(true, Ordering::AcqRel) {
+        let bounded: String = details.chars().take(8192).collect();
+        tracing::warn!(
+            cause = %bounded,
+            "Android memory-info JNI sampling unavailable; memory guard will use procfs fallback"
+        );
     }
 }
 
@@ -256,7 +277,8 @@ fn pending_stack_trace(env: &mut JNIEnv) -> Option<String> {
     if value.is_null() {
         return None;
     }
-    let details = match env.get_string(&JString::from(value)) {
+    let text = JString::from(value);
+    let details = match env.get_string(&text) {
         Ok(details) => details.into(),
         Err(_) => {
             if env.exception_check().unwrap_or(false) {
