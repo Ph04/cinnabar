@@ -226,6 +226,19 @@ impl MemoryPressureLevel {
         }
     }
 
+    /// Reduces newly admitted terrain geometry and lighting jobs during memory pressure.
+    pub fn terrain_job_budget(self, requested: usize) -> usize {
+        if requested == 0 {
+            return 0;
+        }
+        match self {
+            Self::Normal => requested,
+            Self::Moderate => (requested.saturating_mul(3) / 4).max(1),
+            Self::High => (requested / 2).max(1),
+            Self::Critical => (requested / 4).max(1),
+        }
+    }
+
     const fn one_step_recovery(self) -> Self {
         match self {
             Self::Critical => Self::High,
@@ -343,6 +356,16 @@ mod tests {
         assert_eq!(guard.observe(sample), MemoryPressureLevel::High);
         let low_memory = SystemMemorySnapshot { low_memory: true, ..sample };
         assert_eq!(guard.observe(low_memory), MemoryPressureLevel::Critical);
+    }
+
+    #[test]
+    fn terrain_job_budget_only_reduces_requested_work() {
+        assert_eq!(MemoryPressureLevel::Normal.terrain_job_budget(8), 8);
+        assert_eq!(MemoryPressureLevel::Moderate.terrain_job_budget(8), 6);
+        assert_eq!(MemoryPressureLevel::High.terrain_job_budget(8), 4);
+        assert_eq!(MemoryPressureLevel::Critical.terrain_job_budget(8), 2);
+        assert_eq!(MemoryPressureLevel::Critical.terrain_job_budget(1), 1);
+        assert_eq!(MemoryPressureLevel::Critical.terrain_job_budget(0), 0);
     }
 
     #[test]
