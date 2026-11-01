@@ -150,6 +150,34 @@ public final class DiagnosticsFixture {
         javaCrash.delete();
         if (!JavaCrashCapture.readTail(javaCrash).isEmpty())
             throw new AssertionError("missing Java crash log should be harmless");
+        File runtimeLog = new File(args[0] + ".runtime");
+        String runtimeLarge = new String(new char[100000]).replace('\0', 'x') + "runtime-end-marker";
+        RuntimeDiagnostics.write(runtimeLog, "JNI/fixture", runtimeLarge,
+                123456700L, 12345, "fixture-thread", "fixture-device");
+        byte[] runtimeBytes = Files.readAllBytes(runtimeLog.toPath());
+        String runtimeText = new String(runtimeBytes, StandardCharsets.UTF_8);
+        if (runtimeBytes.length > RuntimeDiagnostics.MAX_FILE_BYTES
+                || !runtimeText.endsWith("runtime-end-marker\n"))
+            throw new AssertionError("runtime diagnostics were not bounded or lost their newest tail");
+        if (RuntimeDiagnostics.readTail(runtimeLog).getBytes(StandardCharsets.UTF_8).length > 16 * 1024)
+            throw new AssertionError("runtime diagnostic display tail was not bounded");
+        RuntimeDiagnostics.write(runtimeLog, "JNI/second", "second caught JNI failure",
+                123456701L, 12345, "fixture-thread", "fixture-device");
+        runtimeText = new String(Files.readAllBytes(runtimeLog.toPath()), StandardCharsets.UTF_8);
+        if (!runtimeText.contains("second caught JNI failure")
+                || !runtimeText.contains("runtime-end-marker"))
+            throw new AssertionError("runtime diagnostics did not preserve recent history");
+        RuntimeDiagnostics.write(runtimeLog, "BOOTSTRAP_SETUP", "setup failure detail",
+                123456702L, 12345, "setup", "fixture-device");
+        runtimeText = new String(Files.readAllBytes(runtimeLog.toPath()), StandardCharsets.UTF_8);
+        if (!runtimeText.contains("setup failure detail"))
+            throw new AssertionError("runtime diagnostics lost setup detail");
+        if (!RuntimeDiagnostics.describe(new IllegalStateException("fixture Java stack"))
+                .contains("fixture Java stack"))
+            throw new AssertionError("Java exception formatting lost the cause");
+        runtimeLog.delete();
+        if (!RuntimeDiagnostics.readTail(runtimeLog).isEmpty())
+            throw new AssertionError("missing runtime diagnostics should be harmless");
         byte[] trace = new byte[200000];
         for (int i = 0; i < trace.length; i++) trace[i] = (byte) i;
         for (boolean nativeCrash : new boolean[] {true, false}) {

@@ -44,6 +44,8 @@ final class StartupDiagnostics {
                     + "Process: " + exit.getProcessName() + " (" + exit.getPid() + ")\n"
                     + "Exit timestamp: " + exit.getTimestamp() + "\n\n"
                     + javaCrashSection(activity, exit)
+                    + caughtFailureSection(activity, "jni-errors.log", "Caught JNI exceptions")
+                    + caughtFailureSection(activity, "bootstrap-errors.log", "Caught setup exceptions")
                     + "\n\n" + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
             AlertDialog dialog = new AlertDialog.Builder(activity)
                     .setTitle("@PRODUCT_NAME@ stopped unexpectedly")
@@ -76,6 +78,13 @@ final class StartupDiagnostics {
                 new File(activity.getFilesDir(), "data/logs/java-crash.log"),
                 exit.getTimestamp(), exit.getPid());
         return saved.isEmpty() ? "" : "\n\nSaved Java uncaught exception:\n" + saved;
+    }
+
+    /** Appends locally persisted caught JNI and setup exceptions to the next-exit report. */
+    private static String caughtFailureSection(Activity activity, String fileName, String heading) {
+        String saved = RuntimeDiagnostics.readTail(
+                new File(activity.getFilesDir(), "data/logs/" + fileName));
+        return saved.isEmpty() ? "" : "\n\n" + heading + ":\n" + saved;
     }
 
     /** Only exits with an identified unexpected cause need a recovery dialog. */
