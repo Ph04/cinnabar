@@ -41,6 +41,7 @@ impl ThreadBudget {
     }
 
     /// Low-RAM Android devices trade worker concurrency for a smaller allocation burst.
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn for_device(cores: usize, physical_memory_bytes: u64) -> Self {
         const LOW_MEMORY_DEVICE_LIMIT: u64 = 4_u64 << 30;
         let normal = Self::for_cores(cores);

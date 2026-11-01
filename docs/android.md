@@ -23,7 +23,7 @@ attach the ZIP to the crash report. Nothing is uploaded automatically.
 
 ## Memory pressure protection
 
-Native builds include an automatic memory guard. On Android it samples
+Android and Linux native builds include an automatic memory guard. On Android it samples
 `ActivityManager.MemoryInfo` once per second and falls back to `/proc/meminfo` when the
 system service is unavailable. It compares system-available memory and Android's low-memory
 signal with the client's resident memory; installed RAM is recorded separately and is never

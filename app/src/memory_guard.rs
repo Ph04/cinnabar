@@ -127,7 +127,7 @@ mod tests {
     use launcher_host::memory::SystemMemorySnapshot;
 
     #[test]
-    fn render_queue_memory_budget_descends_without_losing_existing_entries() {
+    fn render_queue_byte_limit_descends_with_pressure() {
         let mut runtime = Runtime::default();
         let normal = 64 * 1024 * 1024;
         assert_eq!(runtime.render_queue_byte_limit(normal), normal);
