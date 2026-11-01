@@ -43,7 +43,8 @@ final class StartupDiagnostics {
                     + "\n" + exit.getDescription() + "\n"
                     + "Process: " + exit.getProcessName() + " (" + exit.getPid() + ")\n"
                     + "Exit timestamp: " + exit.getTimestamp() + "\n\n"
-                    + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
+                    + javaCrashSection(activity)
+                    + "\n\n" + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
             AlertDialog dialog = new AlertDialog.Builder(activity)
                     .setTitle("@PRODUCT_NAME@ stopped unexpectedly")
                     .setMessage("Save report puts this log and any Android crash trace in Downloads.\n\n" + details)
@@ -67,6 +68,13 @@ final class StartupDiagnostics {
             android.util.Log.w("@PRODUCT_NAME@", "Cannot read previous process exit", error);
             return false;
         }
+    }
+
+    /** Includes the bounded Java exception saved before the previous process terminated. */
+    private static String javaCrashSection(Activity activity) {
+        String saved = JavaCrashCapture.readTail(
+                new File(activity.getFilesDir(), "data/logs/java-crash.log"));
+        return saved.isEmpty() ? "" : "\n\nSaved Java uncaught exception:\n" + saved;
     }
 
     /** Only exits with an identified unexpected cause need a recovery dialog. */

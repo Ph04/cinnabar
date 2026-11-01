@@ -115,6 +115,33 @@ public final class DiagnosticsFixture {
         log.delete();
         if (StartupDiagnostics.logTail(log).isEmpty())
             throw new AssertionError("missing log was not explained");
+        File javaCrash = new File(args[0] + ".java-crash");
+        String oversized = new String(new char[100000]).replace('\0', 'x');
+        JavaCrashCapture.write(javaCrash, new Thread("java-crash-fixture"),
+                new RuntimeException(oversized), 123456789L, "fixture-device");
+        byte[] persistedJava = Files.readAllBytes(javaCrash.toPath());
+        String persistedJavaText = new String(persistedJava, StandardCharsets.UTF_8);
+        if (persistedJava.length > 70 * 1024
+                || !persistedJavaText.contains("thread_name=java-crash-fixture")
+                || !persistedJavaText.contains("timestamp_ms=123456789")
+                || !persistedJavaText.contains("[stack trace truncated]"))
+            throw new AssertionError("Java exception was not persisted within its bound");
+        String javaTail = JavaCrashCapture.readTail(javaCrash);
+        if (javaTail.getBytes(StandardCharsets.UTF_8).length > JavaCrashCapture.MAX_TAIL_BYTES
+                || !javaTail.endsWith("[stack trace truncated]\n"))
+            throw new AssertionError("Java crash tail was not bounded or complete");
+        JavaCrashCapture.write(javaCrash, Thread.currentThread(),
+                new IllegalStateException("replacement Java cause"), 123456790L, "fixture-device");
+        String replacementJava = new String(Files.readAllBytes(javaCrash.toPath()), StandardCharsets.UTF_8);
+        if (!replacementJava.contains("replacement Java cause")
+                || replacementJava.contains("[stack trace truncated]")
+                || replacementJava.contains("xxxxxxxx"))
+            throw new AssertionError("new Java exception did not replace the previous report");
+        if (new File(javaCrash.getParentFile(), javaCrash.getName() + ".tmp").exists())
+            throw new AssertionError("temporary Java crash file was not cleaned up");
+        javaCrash.delete();
+        if (!JavaCrashCapture.readTail(javaCrash).isEmpty())
+            throw new AssertionError("missing Java crash log should be harmless");
         byte[] trace = new byte[200000];
         for (int i = 0; i < trace.length; i++) trace[i] = (byte) i;
         for (boolean nativeCrash : new boolean[] {true, false}) {
