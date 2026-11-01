@@ -4,9 +4,7 @@ use bevy::{
     prelude::{Local, Res, ResMut, Resource, Time},
     time::Real,
 };
-use launcher_host::memory::{
-    MemoryGuard, MemoryPressureLevel, SystemMemorySnapshot, system_memory_snapshot,
-};
+use launcher_host::memory::{MemoryGuard, MemoryPressureLevel, system_memory_snapshot};
 use std::time::Duration;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
@@ -35,6 +33,14 @@ impl Runtime {
 
     pub(crate) fn prediction_job_budget(&self, requested: usize) -> usize {
         self.pressure_level().prediction_job_budget(requested)
+    }
+
+    pub(crate) fn mesh_job_budget(&self, requested: usize) -> usize {
+        self.pressure_level().terrain_job_budget(requested)
+    }
+
+    pub(crate) fn light_job_budget(&self, requested: usize) -> usize {
+        self.pressure_level().terrain_job_budget(requested)
     }
 }
 
@@ -98,6 +104,7 @@ pub(crate) fn sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use launcher_host::memory::SystemMemorySnapshot;
 
     #[test]
     fn render_distance_cap_is_temporary_and_never_increases_preference() {
