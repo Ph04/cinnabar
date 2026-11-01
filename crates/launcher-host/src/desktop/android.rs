@@ -5,7 +5,10 @@ use jni::{
     JNIEnv,
     objects::{JClass, JObject, JObjectArray, JString},
 };
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::atomic::{AtomicBool, Ordering}};
+
+/// Avoids repeating a failed Android memory-info JNI call every one-second sample.
+static MEMORY_INFO_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 
 /// `Intent.FLAG_ACTIVITY_NEW_TASK`, required to start an activity from the application context.
 const FLAG_ACTIVITY_NEW_TASK: i32 = 0x1000_0000;
@@ -200,8 +203,70 @@ pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
         let threshold = u64::try_from(threshold).unwrap_or(0);
         Ok(Some((total, available, threshold, low_memory)))
     })();
+    match result {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let details = pending_stack_trace(&mut env).unwrap_or_else(|| error.to_string());
+            if !MEMORY_INFO_FAILURE_REPORTED.swap(true, Ordering::AcqRel) {
+                let bounded: String = details.chars().take(8192).collect();
+                tracing::warn!(
+                    cause = %bounded,
+                    "Android memory-info JNI sampling failed; memory guard will use procfs fallback"
+                );
+            }
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            None
+        }
+    }
+}
+
+/// Captures the stack trace of a Java exception before clearing it from the attached thread.
+fn pending_stack_trace(env: &mut JNIEnv) -> Option<String> {
+    let throwable = match env.exception_occurred() {
+        Ok(throwable) => JObject::from(throwable),
+        Err(_) => {
+            let _ = env.exception_clear();
+            return None;
+        }
+    };
+    if throwable.is_null() {
+        let _ = env.exception_clear();
+        return None;
+    }
+    let _ = env.exception_clear();
+    let value = match env
+        .call_static_method(
+            "android/util/Log",
+            "getStackTraceString",
+            "(Ljava/lang/Throwable;)Ljava/lang/String;",
+            &[(&throwable).into()],
+        )
+        .and_then(|value| value.l())
+    {
+        Ok(value) => value,
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return None;
+        }
+    };
+    if value.is_null() {
+        return None;
+    }
+    let details = match env.get_string(&JString::from(value)) {
+        Ok(details) => details.into(),
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return None;
+        }
+    };
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_clear();
     }
-    result.ok().flatten()
+    Some(details)
 }

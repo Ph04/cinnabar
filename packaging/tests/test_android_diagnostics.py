@@ -80,9 +80,21 @@ public final class DiagnosticsFixture {
         if (!StartupDiagnostics.exitCause(ApplicationExitInfo.REASON_LOW_MEMORY, 0)
                 .contains("ran low on memory")) throw new AssertionError("memory cause missing");
         if (!StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED, 1)
-                || StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED,
+                || !StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED,
                         android.system.OsConstants.SIGKILL))
             throw new AssertionError("signal exit classification changed");
+        for (int reason : new int[] {ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
+                ApplicationExitInfo.REASON_ANOMALY, ApplicationExitInfo.REASON_FREEZER,
+                ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+                ApplicationExitInfo.REASON_DEPENDENCY_DIED}) {
+            if (!StartupDiagnostics.unexpected(reason, 0))
+                throw new AssertionError("system resource exit was ignored: " + reason);
+        }
+        if (!StartupDiagnostics.intentionalTeardown(1000L, 2000L)
+                || StartupDiagnostics.intentionalTeardown(1000L, 31001L)
+                || StartupDiagnostics.intentionalTeardown(2000L, 1000L)
+                || StartupDiagnostics.intentionalTeardown(0L, 1000L))
+            throw new AssertionError("intentional SIGKILL marker window changed");
         File log = new File(args[0]);
         String input = "discarded prefix" + new String(new char[100000]).replace('\\0', 'x') + "end-marker";
         Files.write(log.toPath(), input.getBytes(StandardCharsets.UTF_8));

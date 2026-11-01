@@ -110,6 +110,10 @@ public final class CinnabarActivity extends NativeActivity {
     @Override protected void onDestroy() {
         // The native loop never returns on destroy, which NativeActivity's teardown waits for,
         // and Bevy cannot start twice in one process anyway.
+        getSharedPreferences(StartupDiagnostics.DIAGNOSTICS_PREFERENCES, MODE_PRIVATE)
+                .edit()
+                .putLong("intentional-native-teardown-ms", System.currentTimeMillis())
+                .commit();
         android.os.Process.killProcess(android.os.Process.myPid());
         super.onDestroy();
     }
