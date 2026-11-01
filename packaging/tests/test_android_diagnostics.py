@@ -67,6 +67,11 @@ public final class DiagnosticsFixture {
                 ApplicationExitInfo.REASON_USER_REQUESTED, ApplicationExitInfo.REASON_PACKAGE_UPDATED, -1}) {
             if (StartupDiagnostics.unexpected(reason, 0)) throw new AssertionError(reason);
         }
+        if (!StartupDiagnostics.isMainProcessExit("app.cinnabar", "app.cinnabar")
+                || StartupDiagnostics.isMainProcessExit("app.cinnabar", "app.cinnabar:core")
+                || StartupDiagnostics.isMainProcessExit(null, "app.cinnabar")
+                || StartupDiagnostics.isMainProcessExit("app.cinnabar", null))
+            throw new AssertionError("main process exit selection accepted an auxiliary process");
         String generic = StartupDiagnostics.exitCause(-1, 0);
         for (java.lang.reflect.Field field : ApplicationExitInfo.class.getFields()) {
             if (!field.getName().startsWith("REASON_")) continue;

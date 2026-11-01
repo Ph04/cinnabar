@@ -31,10 +31,10 @@ final class StartupDiagnostics {
         try {
             ActivityManager manager = activity.getSystemService(ActivityManager.class);
             List<ApplicationExitInfo> exits = manager.getHistoricalProcessExitReasons(
-                    activity.getPackageName(), 0, 1);
-            if (exits.isEmpty()) return false;
-            ApplicationExitInfo exit = exits.get(0);
-            if (!activity.getApplicationInfo().processName.equals(exit.getProcessName())) return false;
+                    activity.getPackageName(), 0, 16);
+            String mainProcess = activity.getApplicationInfo().processName;
+            ApplicationExitInfo exit = latestMainProcessExit(exits, mainProcess);
+            if (exit == null) return false;
             if (suppressIntentionalNativeTeardown(activity, exit)) return false;
             if (!unexpected(exit.getReason(), exit.getStatus())) return false;
             android.content.SharedPreferences preferences = activity.getSharedPreferences(
@@ -78,6 +78,21 @@ final class StartupDiagnostics {
             android.util.Log.w("@PRODUCT_NAME@", "Cannot read previous process exit", error);
             return false;
         }
+    }
+
+    /** Chooses the newest history entry for the app's main process, not an auxiliary process. */
+    static ApplicationExitInfo latestMainProcessExit(
+            List<ApplicationExitInfo> exits, String mainProcess) {
+        if (exits == null || mainProcess == null) return null;
+        for (ApplicationExitInfo exit : exits) {
+            if (exit != null && isMainProcessExit(mainProcess, exit.getProcessName())) return exit;
+        }
+        return null;
+    }
+
+    /** Process identity comparison kept separate so auxiliary-process history is testable. */
+    static boolean isMainProcessExit(String mainProcess, String reportedProcess) {
+        return mainProcess != null && mainProcess.equals(reportedProcess);
     }
 
     /** Includes the bounded Java exception saved before the previous process terminated. */
