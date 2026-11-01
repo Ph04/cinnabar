@@ -43,6 +43,15 @@ impl Runtime {
     pub(crate) fn light_job_budget(&self, requested: usize) -> usize {
         self.pressure_level().terrain_job_budget(requested)
     }
+
+    pub(crate) fn render_queue_byte_limit(&self, normal_limit: u64) -> u64 {
+        match self.pressure_level() {
+            MemoryPressureLevel::Normal => normal_limit,
+            MemoryPressureLevel::Moderate => normal_limit.min(48 * 1024 * 1024),
+            MemoryPressureLevel::High => normal_limit.min(32 * 1024 * 1024),
+            MemoryPressureLevel::Critical => normal_limit.min(16 * 1024 * 1024),
+        }
+    }
 }
 
 /// Polls on the frame thread once per second; Android JNI work is never done per frame.
@@ -116,6 +125,30 @@ pub(crate) fn sample(
 mod tests {
     use super::*;
     use launcher_host::memory::SystemMemorySnapshot;
+
+    #[test]
+    fn render_queue_memory_budget_descends_without_losing_existing_entries() {
+        let mut runtime = Runtime::default();
+        let normal = 64 * 1024 * 1024;
+        assert_eq!(runtime.render_queue_byte_limit(normal), normal);
+        runtime.guard.observe(SystemMemorySnapshot {
+            total_bytes: 4 << 30,
+            available_bytes: Some(700 << 20),
+            low_memory_threshold_bytes: Some(256 << 20),
+            low_memory: false,
+            process_resident_bytes: Some(700 << 20),
+        });
+        assert_eq!(runtime.pressure_level(), MemoryPressureLevel::Moderate);
+        assert_eq!(runtime.render_queue_byte_limit(normal), 48 * 1024 * 1024);
+        runtime.guard.observe(SystemMemorySnapshot {
+            total_bytes: 4 << 30,
+            available_bytes: Some(200 << 20),
+            low_memory_threshold_bytes: Some(256 << 20),
+            low_memory: true,
+            process_resident_bytes: Some(700 << 20),
+        });
+        assert_eq!(runtime.render_queue_byte_limit(normal), 16 * 1024 * 1024);
+    }
 
     #[test]
     fn render_distance_cap_is_temporary_and_never_increases_preference() {

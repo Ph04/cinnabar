@@ -734,6 +734,14 @@ pub(crate) fn drive_world_stream(
         ui_runtime.clear_disconnected_block_cracks();
         return;
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let default_queue_limit = render_scene::ChunkRenderQueueLimits::default().max_bytes;
+        render_queue.limits.max_bytes = memory_guard.as_deref().map_or(
+            default_queue_limit,
+            |guard| guard.render_queue_byte_limit(default_queue_limit),
+        );
+    }
     let requested_prediction_budget = block_use.prediction_frames.publication_budget(frame.0);
     #[cfg(not(target_arch = "wasm32"))]
     let prediction_budget = memory_guard.as_deref().map_or(
