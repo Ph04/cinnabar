@@ -52,6 +52,16 @@ impl Runtime {
             MemoryPressureLevel::Critical => normal_limit.min(16 * 1024 * 1024),
         }
     }
+
+    /// Temporary internal resolution cap; screen-space UI keeps its native output size.
+    pub(crate) fn render_scale_cap(&self) -> Option<f32> {
+        match self.pressure_level() {
+            MemoryPressureLevel::Normal => None,
+            MemoryPressureLevel::Moderate => Some(0.90),
+            MemoryPressureLevel::High => Some(0.75),
+            MemoryPressureLevel::Critical => Some(0.60),
+        }
+    }
 }
 
 /// Polls on the frame thread once per second; Android JNI work is never done per frame.
