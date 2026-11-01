@@ -189,6 +189,13 @@ public final class DiagnosticsFixture {
             throw new AssertionError("runtime diagnostics did not preserve recent history");
         RuntimeDiagnostics.write(runtimeLog, "BOOTSTRAP_SETUP", "setup failure detail",
                 123456702L, 12345, "setup", "fixture-device");
+        File coreLog = new File(args[0] + ".core");
+        RuntimeDiagnostics.write(coreLog, "CORE_PROCESS", "Go core bridge failure",
+                123456703L, 12345, "bedrock-core", "fixture-device");
+        if (!RuntimeDiagnostics.readTail(coreLog).contains("Go core bridge failure"))
+            throw new AssertionError("Go core log tail was not readable");
+        coreLog.delete();
+
         runtimeText = new String(Files.readAllBytes(runtimeLog.toPath()), StandardCharsets.UTF_8);
         if (!runtimeText.contains("setup failure detail"))
             throw new AssertionError("runtime diagnostics lost setup detail");

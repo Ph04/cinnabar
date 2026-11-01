@@ -54,6 +54,7 @@ final class StartupDiagnostics {
                     + javaCrashSection(activity, exit)
                     + caughtFailureSection(activity, "jni-errors.log", "Caught JNI exceptions")
                     + caughtFailureSection(activity, "bootstrap-errors.log", "Caught setup exceptions")
+                    + caughtFailureSection(activity, "core.log", "Go core log")
                     + "\n\n" + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
             AlertDialog dialog = new AlertDialog.Builder(activity)
                     .setTitle("@PRODUCT_NAME@ stopped unexpectedly")
