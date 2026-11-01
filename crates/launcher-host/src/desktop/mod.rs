@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
-mod android;
+pub(crate) mod android;
 #[cfg(target_os = "linux")]
 pub mod dbus;
 pub mod picker;

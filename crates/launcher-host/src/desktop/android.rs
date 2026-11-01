@@ -156,3 +156,49 @@ fn pending_exception(env: &mut JNIEnv) -> Option<String> {
     }
     None
 }
+
+
+/// Reads Android's current system memory headroom from ActivityManager.MemoryInfo.
+/// Returns (total, available, low-memory threshold, low-memory flag), in bytes.
+pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
+    let context = ndk_context::android_context();
+    // Android owns the VM and application context for the process lifetime.
+    let vm = unsafe { jni::JavaVM::from_raw(context.vm().cast()) }.ok()?;
+    let mut env = vm.attach_current_thread().ok()?;
+    // SAFETY: ndk-context publishes a live application Context for the process lifetime.
+    let application = unsafe { JObject::from_raw(context.context().cast()) };
+    let result = (|| -> jni::errors::Result<(u64, u64, u64, bool)> {
+        let service_name = env.new_string("activity")?;
+        let manager = env
+            .call_method(
+                &application,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[(&service_name).into()],
+            )?
+            .l()?;
+        if manager.is_null() {
+            return Err(jni::errors::Error::NullPtr("ActivityManager"));
+        }
+        let info = env.new_object("android/app/ActivityManager$MemoryInfo", "()V", &[])?;
+        env.call_method(
+            &manager,
+            "getMemoryInfo",
+            "(Landroid/app/ActivityManager$MemoryInfo;)V",
+            &[(&info).into()],
+        )?;
+        let total = env.get_field(&info, "totalMem", "J")?.j()?;
+        let available = env.get_field(&info, "availMem", "J")?.j()?;
+        let threshold = env.get_field(&info, "threshold", "J")?.j()?;
+        let low_memory = env.get_field(&info, "lowMemory", "Z")?.z()?;
+        let total = u64::try_from(total).ok().filter(|bytes| *bytes > 0)
+            .ok_or(jni::errors::Error::NullPtr("ActivityManager.MemoryInfo.totalMem"))?;
+        let available = u64::try_from(available).unwrap_or(0);
+        let threshold = u64::try_from(threshold).unwrap_or(0);
+        Ok((total, available, threshold, low_memory))
+    })();
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+    result.ok()
+}

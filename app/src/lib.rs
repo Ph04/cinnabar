@@ -103,6 +103,8 @@ pub mod browser;
 mod browser_input;
 
 mod host_memory;
+#[cfg(not(target_arch = "wasm32"))]
+mod memory_guard;
 
 mod game_frame;
 
