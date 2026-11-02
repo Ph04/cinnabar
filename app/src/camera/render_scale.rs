@@ -56,6 +56,8 @@ fn extract_scale_requests(
     scale: Res<RenderScaleOverride>,
     settings: Extract<Option<Res<RuntimeSettings>>>,
     player: Extract<Option<Res<PlayerRuntime>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    memory_guard: Extract<Option<Res<crate::memory_guard::Runtime>>>,
     owners: Extract<Query<RenderEntity, With<FlyCamera>>>,
     previous: Query<(Entity, &RenderScaleRequest)>,
     filter: Option<Res<render::RenderScaleSharpen>>,
@@ -69,11 +71,18 @@ fn extract_scale_requests(
     if filter.as_ref().map(|filter| filter.0) != Some(sharpen) {
         commands.insert_resource(render::RenderScaleSharpen(sharpen));
     }
-    let scale = scale.0.unwrap_or_else(|| {
+    let configured_scale = scale.0.unwrap_or_else(|| {
         settings.as_ref().map_or(1.0, |settings| {
             f32::from(settings.user_settings_update().1.video.render_scale_percent) / 100.0
         })
     });
+    #[cfg(not(target_arch = "wasm32"))]
+    let scale = memory_guard
+        .as_ref()
+        .and_then(|guard| guard.render_scale_cap())
+        .map_or(configured_scale, |cap| configured_scale.min(cap));
+    #[cfg(target_arch = "wasm32")]
+    let scale = configured_scale;
     // StartGame identity survives the between-frame world-stream handoff and clears on leave.
     let in_world = player
         .as_ref()

@@ -77,14 +77,25 @@ extern "system" fn prepare<'local>(
 ) -> jstring {
     let _serial = SETUP.lock().unwrap_or_else(PoisonError::into_inner);
     let outcome = if CANCELLATION.begin(attempt as u64) {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             setup(&mut env, &activity, &files_dir, &native_library_dir)
-        }))
-        .unwrap_or_else(|_| Err(anyhow!("setup panicked")))
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .map(|value| (*value).to_owned())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string Rust panic payload".to_owned());
+                let details = format!("{message}\n{}", std::backtrace::Backtrace::force_capture());
+                record_native_diagnostic(&mut env, &activity, "RUST_SETUP_PANIC", &details);
+                Err(anyhow!("setup panicked: {message}"))
+            }
+        }
     } else {
         Ok(Outcome::Quit)
     };
-    clear_exception(&mut env);
+    clear_exception(&mut env, &activity, "setup prepare return");
     let reply = match outcome {
         Ok(Outcome::Quit) => String::new(),
         Ok(Outcome::NotNeeded | Outcome::Prepared) => return std::ptr::null_mut(),
@@ -163,6 +174,7 @@ fn export_platform_trust(env: &mut JNIEnv<'_>, activity: &JObject<'_>, root: &Pa
     if !available {
         log_warning(
             env,
+            activity,
             "Platform trust export failed; local worlds may lose online services",
         );
     }
@@ -182,7 +194,7 @@ fn platform_trust_pem(env: &mut JNIEnv<'_>, activity: &JObject<'_>) -> Result<St
         Ok(String::from(env.get_string(&JString::from(pem))?))
     });
     if result.is_err() {
-        clear_exception(env);
+        clear_exception(env, activity, "platformTrustPem");
     }
     let pem = result?;
     if pem.is_empty() {
@@ -192,7 +204,7 @@ fn platform_trust_pem(env: &mut JNIEnv<'_>, activity: &JObject<'_>) -> Result<St
 }
 
 /// Logs `message` at warning priority under the product's tag, discarding any logging failure.
-fn log_warning(env: &mut JNIEnv<'_>, message: &str) {
+fn log_warning(env: &mut JNIEnv<'_>, activity: &JObject<'_>, message: &str) {
     let logged = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
         let tag = env.new_string(launcher::PRODUCT_NAME)?;
         let message = env.new_string(message)?;
@@ -205,7 +217,7 @@ fn log_warning(env: &mut JNIEnv<'_>, message: &str) {
         Ok(())
     });
     if logged.is_err() {
-        clear_exception(env);
+        clear_exception(env, activity, "android.util.Log.w");
     }
 }
 
@@ -231,13 +243,63 @@ fn call_activity(
         })
     });
     if result.is_err() {
-        clear_exception(env);
+        clear_exception(env, activity, name);
     }
     result
 }
 
-/// A pending Java exception would make every later JNI call on this thread fail.
-fn clear_exception(env: &mut JNIEnv<'_>) {
+/// Persists a Rust-side failure through the bootstrap activity's private diagnostic writer.
+fn record_native_diagnostic(
+    env: &mut JNIEnv<'_>,
+    activity: &JObject<'_>,
+    stage: &str,
+    details: &str,
+) {
+    let logged = (|| -> jni::errors::Result<()> {
+        let stage = env.new_string(stage)?;
+        let details = env.new_string(details)?;
+        env.call_method(
+            activity,
+            "recordJniException",
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[JValue::Object(&stage), JValue::Object(&details)],
+        )?;
+        Ok(())
+    })();
+    if logged.is_err() && env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+}
+
+/// Captures a pending Java throwable before clearing it, so later JNI calls remain valid.
+fn clear_exception(env: &mut JNIEnv<'_>, activity: &JObject<'_>, stage: &str) {
+    if !env.exception_check().unwrap_or(false) {
+        return;
+    }
+    let throwable = env.exception_occurred().ok().map(JObject::from);
+    let _ = env.exception_clear();
+    let details = throwable
+        .and_then(|throwable| {
+            env.call_static_method(
+                "android/util/Log",
+                "getStackTraceString",
+                "(Ljava/lang/Throwable;)Ljava/lang/String;",
+                &[JValue::Object(&throwable)],
+            )
+            .and_then(|value| value.l())
+            .and_then(|value| {
+                let text = JString::from(value);
+                env.get_string(&text).map(|value| value.into())
+            })
+            .ok()
+        })
+        .unwrap_or_else(|| "Java exception pending, but its stack trace could not be read".to_owned());
+    // Log.getStackTraceString can itself throw; clear that secondary exception before
+    // invoking the Java persistence callback on the same JNI environment.
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+    record_native_diagnostic(env, activity, stage, &details);
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_clear();
     }

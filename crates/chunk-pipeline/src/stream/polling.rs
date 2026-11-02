@@ -5,6 +5,13 @@ use {
 };
 
 impl WorldStream {
+    /// Full per-poll light dispatch budget used by the non-adaptive path.
+    pub const DEFAULT_LIGHT_JOB_BUDGET: usize = LIGHT_DISPATCH_BUDGET_PER_POLL;
+
+    /// Requests all world workers to release retained CPU scratch after their current work.
+    pub fn request_worker_scratch_reclaim() {
+        workers::request_scratch_reclaim();
+    }
     /// Prioritizes the complete spawn columns and their light halo while entry is pending.
     pub fn set_startup_priority(&mut self, enabled: bool) {
         self.startup_priority = enabled;
@@ -68,7 +75,27 @@ impl WorldStream {
             .then(|| forward.map(|value| value / length));
     }
 
+    /// Normal renderer policy: full light dispatch and a removal allowance matching mesh jobs.
     pub fn poll(&mut self, camera_position: [f32; 3], max_mesh_jobs: usize) -> WorldStreamPoll {
+        self.poll_with_budgets(
+            camera_position,
+            max_mesh_jobs,
+            Self::DEFAULT_LIGHT_JOB_BUDGET,
+            max_mesh_jobs,
+        )
+    }
+
+    /// Polls with independent geometry, lighting and removal budgets.
+    ///
+    /// Keeping removals independent lets memory pressure stop admitting new expensive geometry
+    /// while still allowing stale terrain to be retired promptly.
+    pub fn poll_with_budgets(
+        &mut self,
+        camera_position: [f32; 3],
+        max_mesh_jobs: usize,
+        max_light_jobs: usize,
+        max_removal_jobs: usize,
+    ) -> WorldStreamPoll {
         #[cfg(feature = "tracy")]
         let _zone = tracing::info_span!("stream.poll").entered();
         let mesh_changes_queued = self.stats.publication_stages.mesh_changes_queued;
@@ -81,7 +108,7 @@ impl WorldStream {
         let removal_budget = self
             .publication_allowance
             .as_ref()
-            .map_or(max_mesh_jobs, |allowance| {
+            .map_or(max_removal_jobs, |allowance| {
                 allowance.zero_byte_admission_capacity_with_priority(true)
             });
         let early_removals =
@@ -132,7 +159,7 @@ impl WorldStream {
             return self.finish_poll(report, commit_steps, mesh_changes_queued, maintenance_items);
         }
         report.light_jobs_dispatched =
-            self.dispatch_light_jobs(camera_position, LIGHT_DISPATCH_BUDGET_PER_POLL);
+            self.dispatch_light_jobs(camera_position, max_light_jobs);
 
         if self.service_yield_requested() {
             return self.finish_poll(report, commit_steps, mesh_changes_queued, maintenance_items);
@@ -187,7 +214,7 @@ impl WorldStream {
         } else {
             self.publication_allowance
                 .as_ref()
-                .map_or(max_mesh_jobs.saturating_sub(early_removals), |allowance| {
+                .map_or(max_removal_jobs.saturating_sub(early_removals), |allowance| {
                     allowance.zero_byte_admission_capacity_with_priority(true)
                 })
                 .min(MAX_PENDING_MESH_CHANGES.saturating_sub(self.mesh_changes.len()))

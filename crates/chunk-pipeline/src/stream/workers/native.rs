@@ -58,7 +58,10 @@ fn work(shared: &Shared, name: &str, background: bool) {
             std::process::abort();
         }
         restore_lowered_job();
-        scratch.finished(now());
+        let finished_at = now();
+        scratch.finished(finished_at);
+        // A memory-pressure reclaim is observed immediately after the current task finishes.
+        scratch.release_if_idle(finished_at);
         queues = shared.lock();
     }
 }

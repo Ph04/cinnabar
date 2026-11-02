@@ -5,7 +5,10 @@ use jni::{
     JNIEnv,
     objects::{JClass, JObject, JObjectArray, JString},
 };
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::atomic::{AtomicBool, Ordering}};
+
+/// Avoids repeating a failed Android memory-info JNI call every one-second sample.
+static MEMORY_INFO_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 
 /// `Intent.FLAG_ACTIVITY_NEW_TASK`, required to start an activity from the application context.
 const FLAG_ACTIVITY_NEW_TASK: i32 = 0x1000_0000;
@@ -155,4 +158,137 @@ fn pending_exception(env: &mut JNIEnv) -> Option<String> {
         }
     }
     None
+}
+
+/// Reads Android's current system memory headroom from ActivityManager.MemoryInfo.
+/// Returns (total, available, low-memory threshold, low-memory flag), in bytes.
+pub(crate) fn memory_info() -> Option<(u64, u64, u64, bool)> {
+    let context = ndk_context::android_context();
+    // Android owns the VM and application context for the process lifetime.
+    let vm = match unsafe { jni::JavaVM::from_raw(context.vm().cast()) } {
+        Ok(vm) => vm,
+        Err(error) => {
+            log_memory_info_failure(&error.to_string());
+            return None;
+        }
+    };
+    let mut env = match vm.attach_current_thread() {
+        Ok(env) => env,
+        Err(error) => {
+            log_memory_info_failure(&error.to_string());
+            return None;
+        }
+    };
+    // SAFETY: ndk-context publishes a live application Context for the process lifetime.
+    let application = unsafe { JObject::from_raw(context.context().cast()) };
+    let result = (|| -> jni::errors::Result<Option<(u64, u64, u64, bool)>> {
+        let service_name = env.new_string("activity")?;
+        let manager = env
+            .call_method(
+                &application,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[(&service_name).into()],
+            )?
+            .l()?;
+        if manager.is_null() {
+            return Ok(None);
+        }
+        let info = env.new_object("android/app/ActivityManager$MemoryInfo", "()V", &[])?;
+        env.call_method(
+            &manager,
+            "getMemoryInfo",
+            "(Landroid/app/ActivityManager$MemoryInfo;)V",
+            &[(&info).into()],
+        )?;
+        let total = env.get_field(&info, "totalMem", "J")?.j()?;
+        let available = env.get_field(&info, "availMem", "J")?.j()?;
+        let threshold = env.get_field(&info, "threshold", "J")?.j()?;
+        let low_memory = env.get_field(&info, "lowMemory", "Z")?.z()?;
+        let Ok(total) = u64::try_from(total) else {
+            return Ok(None);
+        };
+        if total == 0 {
+            return Ok(None);
+        }
+        let available = u64::try_from(available).unwrap_or(0);
+        let threshold = u64::try_from(threshold).unwrap_or(0);
+        Ok(Some((total, available, threshold, low_memory)))
+    })();
+    match result {
+        Ok(Some(snapshot)) => Some(snapshot),
+        Ok(None) => {
+            log_memory_info_failure("ActivityManager returned no usable MemoryInfo snapshot");
+            None
+        }
+        Err(error) => {
+            let details = pending_stack_trace(&mut env).unwrap_or_else(|| error.to_string());
+            log_memory_info_failure(&details);
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            None
+        }
+    }
+}
+
+/// Records only the first Android memory JNI failure; callers then use procfs as a fallback.
+fn log_memory_info_failure(details: &str) {
+    if !MEMORY_INFO_FAILURE_REPORTED.swap(true, Ordering::AcqRel) {
+        let bounded: String = details.chars().take(8192).collect();
+        tracing::warn!(
+            cause = %bounded,
+            "Android memory-info JNI sampling unavailable; memory guard will use procfs fallback"
+        );
+    }
+}
+
+/// Captures the stack trace of a Java exception before clearing it from the attached thread.
+fn pending_stack_trace(env: &mut JNIEnv) -> Option<String> {
+    let throwable = match env.exception_occurred() {
+        Ok(throwable) => JObject::from(throwable),
+        Err(_) => {
+            let _ = env.exception_clear();
+            return None;
+        }
+    };
+    if throwable.is_null() {
+        let _ = env.exception_clear();
+        return None;
+    }
+    let _ = env.exception_clear();
+    let value = match env
+        .call_static_method(
+            "android/util/Log",
+            "getStackTraceString",
+            "(Ljava/lang/Throwable;)Ljava/lang/String;",
+            &[(&throwable).into()],
+        )
+        .and_then(|value| value.l())
+    {
+        Ok(value) => value,
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return None;
+        }
+    };
+    if value.is_null() {
+        return None;
+    }
+    let text = JString::from(value);
+    let details = match env.get_string(&text) {
+        Ok(details) => details.into(),
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return None;
+        }
+    };
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+    Some(details)
 }

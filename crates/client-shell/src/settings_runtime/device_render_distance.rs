@@ -30,7 +30,7 @@ pub fn initialize_render_distance(
         graphics_bytes.unwrap_or(0),
     ));
     menu.sync_render_distance_device(ui::RenderDistanceDevice {
-        physical_memory_bytes: launcher_host::memory::physical_bytes(),
+        physical_memory_bytes: launcher_host::memory::render_distance_recommendation_bytes(),
         dedicated_graphics_memory_bytes: graphics_bytes.unwrap_or(0),
         use_full_graphics_memory: false,
     });

@@ -21,6 +21,30 @@ duplicate log lines appear once with a repeat count. Include those details when 
 when available. For native crashes on Android 12+, the trace is the original tombstone protobuf;
 attach the ZIP to the crash report. Nothing is uploaded automatically.
 
+## Memory pressure protection
+
+Android and Linux native builds include an automatic memory guard. On Android it samples
+`ActivityManager.MemoryInfo` once per second and falls back to `/proc/meminfo` when the
+system service is unavailable. It compares system-available memory and Android's low-memory
+signal with the client's resident memory; installed RAM is recorded separately and is never
+treated as free memory.
+
+As pressure rises, the guard temporarily lowers the active view distance and internal 3D render
+resolution (the screen-space UI remains at native output resolution), reduces sub-chunk requests
+and optional prediction work, and throttles mesh and lighting job admission. It also
+tightens the pending terrain-upload byte limit, requests world workers to release reusable
+CPU scratch buffers after their current task, and selects a smaller worker/compilation profile
+on Android devices with up to 4 GiB of RAM. Existing world data, player state, saving and
+network-session ownership are not deliberately discarded. The render-distance preference
+saved by the player is not overwritten, and workload limits recover gradually after memory
+headroom remains healthy.
+
+This is a best-effort pressure response, not a guarantee against Android's low-memory process
+killer. It cannot prevent an immediate system kill or repair a native GPU-driver fault. The
+current guard does not yet read a reliable per-process GPU-memory budget from every Vulkan
+driver, and local-server memory is represented indirectly by system-wide available memory.
+Physical-phone acceptance, including the 4 GiB Mali-G57 profile, is still required.
+
 ## Build and install
 
 Install a JDK, Go, CMake, Ninja, a Linux ARM64 GCC/G++ cross-toolchain, librsvg or ImageMagick

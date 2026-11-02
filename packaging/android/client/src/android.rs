@@ -4,16 +4,20 @@ mod bootstrap;
 
 use std::{
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{OnceLock, atomic::{AtomicBool, Ordering}},
 };
 
 use anyhow::{Context, Result};
 use bevy::android::{ANDROID_APP, android_activity::AndroidApp};
 use jni::{
     JavaVM,
-    objects::{JObject, JString},
+    objects::{JObject, JString, JValue},
 };
 use launcher::install_layout::{InstallLayout, configure_android};
+
+/// Prevents a persistent activity callback failure from filling the diagnostic log every frame.
+static STARTUP_PROGRESS_FAILED: AtomicBool = AtomicBool::new(false);
+static STARTUP_GENERATION_FAILED: AtomicBool = AtomicBool::new(false);
 
 /// Names shared with `packaging/android/build-apk.sh`.
 #[derive(serde::Deserialize)]
@@ -70,13 +74,21 @@ fn show_startup_failure(error: &anyhow::Error) -> Result<()> {
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
     let mut env = vm.attach_current_thread()?;
     let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    let message = env.new_string(format!("{error:#}"))?;
-    env.call_method(
-        &activity,
-        "startupFailed",
-        "(Ljava/lang/String;)V",
-        &[(&message).into()],
-    )?;
+    let display = format!("{error:#}");
+    let shown = (|| -> Result<()> {
+        let message = env.new_string(display)?;
+        env.call_method(
+            &activity,
+            "startupFailed",
+            "(Ljava/lang/String;)V",
+            &[(&message).into()],
+        )?;
+        Ok(())
+    })();
+    if let Err(display_error) = shown {
+        record_jni_failure(&mut env, &activity, "startupFailed", &display_error);
+        return Err(display_error);
+    }
     loop {
         let mut destroyed = false;
         let mut input_available = false;
@@ -122,20 +134,26 @@ fn native_library_dir(app: &AndroidApp) -> Result<PathBuf> {
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
     let mut env = vm.attach_current_thread_permanently()?;
     let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    let info = env
-        .call_method(
-            &activity,
-            "getApplicationInfo",
-            "()Landroid/content/pm/ApplicationInfo;",
-            &[],
-        )?
-        .l()?;
-    let directory = JString::from(
-        env.get_field(&info, "nativeLibraryDir", "Ljava/lang/String;")?
-            .l()?,
-    );
-    let directory: String = env.get_string(&directory)?.into();
-    Ok(PathBuf::from(directory))
+    let result = (|| -> Result<PathBuf> {
+        let info = env
+            .call_method(
+                &activity,
+                "getApplicationInfo",
+                "()Landroid/content/pm/ApplicationInfo;",
+                &[],
+            )?
+            .l()?;
+        let directory = JString::from(
+            env.get_field(&info, "nativeLibraryDir", "Ljava/lang/String;")?
+                .l()?,
+        );
+        let directory: String = env.get_string(&directory)?.into();
+        Ok(PathBuf::from(directory))
+    })();
+    if let Err(error) = &result {
+        record_jni_failure(&mut env, &activity, "nativeLibraryDir", error);
+    }
+    result
 }
 
 /// Posts work or content readiness without blocking the activity's UI thread.
@@ -148,7 +166,7 @@ fn startup_progress(message: launcher::startup::Message, generation: u64) {
         let mut env = vm.attach_current_thread()?;
         let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
         let text = env.new_string(serde_json::to_string(&message)?)?;
-        env.call_method(
+        let result = env.call_method(
             &activity,
             "startupProgress",
             "(Ljava/lang/String;J)V",
@@ -156,14 +174,20 @@ fn startup_progress(message: launcher::startup::Message, generation: u64) {
                 (&text).into(),
                 jni::objects::JValue::Long(generation as i64),
             ],
-        )?;
+        );
+        if let Err(error) = result {
+            let error: anyhow::Error = error.into();
+            if !STARTUP_PROGRESS_FAILED.swap(true, Ordering::AcqRel) {
+                record_jni_failure(&mut env, &activity, "startupProgress", &error);
+            }
+            return Err(error);
+        }
         Ok(())
     })();
     if let Err(error) = report {
         bevy::log::warn!("startup feedback unavailable: {error:#}");
     }
 }
-
 /// Samples the activity lifetime before validating the next destination frame.
 fn startup_generation() -> u64 {
     let read = (|| -> Result<u64> {
@@ -173,9 +197,58 @@ fn startup_generation() -> u64 {
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
         let mut env = vm.attach_current_thread()?;
         let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-        Ok(env
-            .call_method(&activity, "startupGeneration", "()J", &[])?
-            .j()? as u64)
+        let result = env.call_method(&activity, "startupGeneration", "()J", &[]);
+        match result {
+            Ok(value) => Ok(value.j()? as u64),
+            Err(error) => {
+                let error: anyhow::Error = error.into();
+                if !STARTUP_GENERATION_FAILED.swap(true, Ordering::AcqRel) {
+                    record_jni_failure(&mut env, &activity, "startupGeneration", &error);
+                }
+                Err(error)
+            }
+        }
     })();
     read.unwrap_or_default()
+}
+
+/// Writes the native-side error and any still-pending Java throwable to the app's bounded log.
+fn record_jni_failure(
+    env: &mut jni::JNIEnv<'_>,
+    activity: &JObject<'_>,
+    stage: &str,
+    error: &anyhow::Error,
+) {
+    let mut details = format!("{error:#}");
+    if env.exception_check().unwrap_or(false) {
+        let throwable = env.exception_occurred().ok().map(JObject::from);
+        let _ = env.exception_clear();
+        if let Some(throwable) = throwable {
+            if let Ok(value) = env.call_static_method(
+                "android/util/Log",
+                "getStackTraceString",
+                "(Ljava/lang/Throwable;)Ljava/lang/String;",
+                &[JValue::Object(&throwable)],
+            ).and_then(|value| value.l()) {
+                let text = JString::from(value);
+                if let Ok(value) = env.get_string(&text) {
+                    details = value.into();
+                }
+            }
+        }
+    }
+    let logged = (|| -> jni::errors::Result<()> {
+        let stage = env.new_string(stage)?;
+        let details = env.new_string(details)?;
+        env.call_method(
+            activity,
+            "recordJniException",
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[JValue::Object(&stage), JValue::Object(&details)],
+        )?;
+        Ok(())
+    })();
+    if logged.is_err() && env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
 }

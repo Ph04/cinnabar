@@ -67,6 +67,11 @@ public final class DiagnosticsFixture {
                 ApplicationExitInfo.REASON_USER_REQUESTED, ApplicationExitInfo.REASON_PACKAGE_UPDATED, -1}) {
             if (StartupDiagnostics.unexpected(reason, 0)) throw new AssertionError(reason);
         }
+        if (!StartupDiagnostics.isMainProcessExit("app.cinnabar", "app.cinnabar")
+                || StartupDiagnostics.isMainProcessExit("app.cinnabar", "app.cinnabar:core")
+                || StartupDiagnostics.isMainProcessExit(null, "app.cinnabar")
+                || StartupDiagnostics.isMainProcessExit("app.cinnabar", null))
+            throw new AssertionError("main process exit selection accepted an auxiliary process");
         String generic = StartupDiagnostics.exitCause(-1, 0);
         for (java.lang.reflect.Field field : ApplicationExitInfo.class.getFields()) {
             if (!field.getName().startsWith("REASON_")) continue;
@@ -80,9 +85,24 @@ public final class DiagnosticsFixture {
         if (!StartupDiagnostics.exitCause(ApplicationExitInfo.REASON_LOW_MEMORY, 0)
                 .contains("ran low on memory")) throw new AssertionError("memory cause missing");
         if (!StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED, 1)
-                || StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED,
+                || !StartupDiagnostics.unexpected(ApplicationExitInfo.REASON_SIGNALED,
                         android.system.OsConstants.SIGKILL))
             throw new AssertionError("signal exit classification changed");
+        if (!StartupDiagnostics.exitCause(ApplicationExitInfo.REASON_SIGNALED,
+                android.system.OsConstants.SIGKILL).contains("memory pressure"))
+            throw new AssertionError("SIGKILL memory-pressure explanation missing");
+        for (int reason : new int[] {ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
+                ApplicationExitInfo.REASON_ANOMALY, ApplicationExitInfo.REASON_FREEZER,
+                ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+                ApplicationExitInfo.REASON_DEPENDENCY_DIED}) {
+            if (!StartupDiagnostics.unexpected(reason, 0))
+                throw new AssertionError("system resource exit was ignored: " + reason);
+        }
+        if (!StartupDiagnostics.intentionalTeardown(1000L, 2000L)
+                || StartupDiagnostics.intentionalTeardown(1000L, 31001L)
+                || StartupDiagnostics.intentionalTeardown(2000L, 1000L)
+                || StartupDiagnostics.intentionalTeardown(0L, 1000L))
+            throw new AssertionError("intentional SIGKILL marker window changed");
         File log = new File(args[0]);
         String input = "discarded prefix" + new String(new char[100000]).replace('\\0', 'x') + "end-marker";
         Files.write(log.toPath(), input.getBytes(StandardCharsets.UTF_8));
@@ -115,6 +135,76 @@ public final class DiagnosticsFixture {
         log.delete();
         if (StartupDiagnostics.logTail(log).isEmpty())
             throw new AssertionError("missing log was not explained");
+        File javaCrash = new File(args[0] + ".java-crash");
+        String oversized = new String(new char[100000]).replace('\0', 'x');
+        JavaCrashCapture.write(javaCrash, new Thread("java-crash-fixture"),
+                new RuntimeException(oversized), 123456789L, 12345, "fixture-device");
+        byte[] persistedJava = Files.readAllBytes(javaCrash.toPath());
+        String persistedJavaText = new String(persistedJava, StandardCharsets.UTF_8);
+        if (persistedJava.length > 70 * 1024
+                || !persistedJavaText.contains("thread_name=java-crash-fixture")
+                || !persistedJavaText.contains("timestamp_ms=123456789")
+                || !persistedJavaText.contains("[stack trace truncated]"))
+            throw new AssertionError("Java exception was not persisted within its bound");
+        String javaTail = JavaCrashCapture.readTail(javaCrash);
+        if (javaTail.getBytes(StandardCharsets.UTF_8).length > JavaCrashCapture.MAX_TAIL_BYTES
+                || !javaTail.endsWith("[stack trace truncated]\n"))
+            throw new AssertionError("Java crash tail was not bounded or complete");
+        if (JavaCrashCapture.readForExit(javaCrash, 123456789L, 12345).isEmpty()
+                || !JavaCrashCapture.readForExit(javaCrash, 123456789L + 120001L, 12345).isEmpty()
+                || !JavaCrashCapture.readForExit(javaCrash, 123456789L, 12346).isEmpty())
+            throw new AssertionError("Java report was not matched to its process exit");
+        JavaCrashCapture.write(javaCrash, Thread.currentThread(),
+                new IllegalStateException("replacement Java cause"), 123456790L, 12345, "fixture-device");
+        String replacementJava = new String(Files.readAllBytes(javaCrash.toPath()), StandardCharsets.UTF_8);
+        if (!replacementJava.contains("replacement Java cause")
+                || replacementJava.contains("[stack trace truncated]")
+                || replacementJava.contains("xxxxxxxx"))
+            throw new AssertionError("new Java exception did not replace the previous report");
+        if (!JavaCrashCapture.readForExit(javaCrash, 123456790L, 12345).contains("replacement Java cause")
+                || !JavaCrashCapture.readForExit(javaCrash, 123456790L, 12346).isEmpty()
+                || !JavaCrashCapture.readForExit(javaCrash, 123456789L + 120001L, 12345).isEmpty())
+            throw new AssertionError("stale Java exception was associated with a later process exit");
+        if (new File(javaCrash.getParentFile(), javaCrash.getName() + ".tmp").exists())
+            throw new AssertionError("temporary Java crash file was not cleaned up");
+        javaCrash.delete();
+        if (!JavaCrashCapture.readTail(javaCrash).isEmpty())
+            throw new AssertionError("missing Java crash log should be harmless");
+        File runtimeLog = new File(args[0] + ".runtime");
+        String runtimeLarge = new String(new char[100000]).replace('\0', 'x') + "runtime-end-marker";
+        RuntimeDiagnostics.write(runtimeLog, "JNI/fixture", runtimeLarge,
+                123456700L, 12345, "fixture-thread", "fixture-device");
+        byte[] runtimeBytes = Files.readAllBytes(runtimeLog.toPath());
+        String runtimeText = new String(runtimeBytes, StandardCharsets.UTF_8);
+        if (runtimeBytes.length > RuntimeDiagnostics.MAX_FILE_BYTES
+                || !runtimeText.endsWith("runtime-end-marker\n"))
+            throw new AssertionError("runtime diagnostics were not bounded or lost their newest tail");
+        if (RuntimeDiagnostics.readTail(runtimeLog).getBytes(StandardCharsets.UTF_8).length > 16 * 1024)
+            throw new AssertionError("runtime diagnostic display tail was not bounded");
+        RuntimeDiagnostics.write(runtimeLog, "JNI/second", "second caught JNI failure",
+                123456701L, 12345, "fixture-thread", "fixture-device");
+        runtimeText = new String(Files.readAllBytes(runtimeLog.toPath()), StandardCharsets.UTF_8);
+        if (!runtimeText.contains("second caught JNI failure")
+                || !runtimeText.contains("runtime-end-marker"))
+            throw new AssertionError("runtime diagnostics did not preserve recent history");
+        RuntimeDiagnostics.write(runtimeLog, "BOOTSTRAP_SETUP", "setup failure detail",
+                123456702L, 12345, "setup", "fixture-device");
+        File coreLog = new File(args[0] + ".core");
+        RuntimeDiagnostics.write(coreLog, "CORE_PROCESS", "Go core bridge failure",
+                123456703L, 12345, "bedrock-core", "fixture-device");
+        if (!RuntimeDiagnostics.readTail(coreLog).contains("Go core bridge failure"))
+            throw new AssertionError("Go core log tail was not readable");
+        coreLog.delete();
+
+        runtimeText = new String(Files.readAllBytes(runtimeLog.toPath()), StandardCharsets.UTF_8);
+        if (!runtimeText.contains("setup failure detail"))
+            throw new AssertionError("runtime diagnostics lost setup detail");
+        if (!RuntimeDiagnostics.describe(new IllegalStateException("fixture Java stack"))
+                .contains("fixture Java stack"))
+            throw new AssertionError("Java exception formatting lost the cause");
+        runtimeLog.delete();
+        if (!RuntimeDiagnostics.readTail(runtimeLog).isEmpty())
+            throw new AssertionError("missing runtime diagnostics should be harmless");
         byte[] trace = new byte[200000];
         for (int i = 0; i < trace.length; i++) trace[i] = (byte) i;
         for (boolean nativeCrash : new boolean[] {true, false}) {

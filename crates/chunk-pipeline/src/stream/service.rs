@@ -25,11 +25,18 @@ impl WorldStream {
         &mut self,
         camera_position: [f32; 3],
         max_mesh_jobs: usize,
+        max_light_jobs: usize,
+        max_removal_jobs: usize,
         yield_request: &Arc<AtomicBool>,
     ) -> (WorldStreamPoll, bool) {
         self.service_yield = Some(Arc::clone(yield_request));
         self.frame_deadline = Some(Instant::now() + SERVICE_SLICE);
-        let report = self.poll(camera_position, max_mesh_jobs);
+        let report = self.poll_with_budgets(
+            camera_position,
+            max_mesh_jobs,
+            max_light_jobs,
+            max_removal_jobs,
+        );
         self.service_yield = None;
         // Commits, worker activity and queued publications all count as progress.
         // Only a slice that made none sleeps until a worker result can change that.
@@ -161,6 +168,8 @@ struct Lent {
     stream: WorldStream,
     camera_position: [f32; 3],
     max_mesh_jobs: usize,
+    max_light_jobs: usize,
+    max_removal_jobs: usize,
     report: WorldStreamPoll,
     busy: Duration,
     /// When the service first polled this loan; `None` while it has not run.
@@ -266,9 +275,27 @@ impl WorldStreamService {
     /// If the service already holds a stream.
     pub fn launch(
         &mut self,
+        stream: WorldStream,
+        camera_position: [f32; 3],
+        max_mesh_jobs: usize,
+    ) {
+        self.launch_with_budgets(
+            stream,
+            camera_position,
+            max_mesh_jobs,
+            WorldStream::DEFAULT_LIGHT_JOB_BUDGET,
+            max_mesh_jobs,
+        );
+    }
+
+    /// Lends the stream with independent geometry, lighting and removal budgets.
+    pub fn launch_with_budgets(
+        &mut self,
         mut stream: WorldStream,
         camera_position: [f32; 3],
         max_mesh_jobs: usize,
+        max_light_jobs: usize,
+        max_removal_jobs: usize,
     ) {
         assert!(!self.servicing, "the service already holds a stream");
         let wake = stream.has_service_work();
@@ -286,6 +313,8 @@ impl WorldStreamService {
                 stream,
                 camera_position,
                 max_mesh_jobs,
+                max_light_jobs,
+                max_removal_jobs,
                 report: WorldStreamPoll::default(),
                 busy: Duration::ZERO,
                 serving_since: None,
@@ -411,6 +440,8 @@ fn service_lent(shared: &Shared, wake: &Receiver<()>) -> bool {
             lent.stream.service_slice(
                 lent.camera_position,
                 lent.max_mesh_jobs,
+                lent.max_light_jobs,
+                lent.max_removal_jobs,
                 &shared.yield_request,
             )
         }));

@@ -18,6 +18,9 @@ import java.util.regex.Pattern;
 /** Makes an unexpected exit visible on the next launch without needing USB debugging. */
 final class StartupDiagnostics {
     static final int LOG_TAIL_BYTES = 32768;
+    static final String DIAGNOSTICS_PREFERENCES = "cinnabar-runtime-diagnostics";
+    private static final String INTENTIONAL_TEARDOWN_KEY = "intentional-native-teardown-ms";
+    private static final long INTENTIONAL_TEARDOWN_WINDOW_MS = 30_000L;
     private static final String GENERIC_EXIT = "Android stopped @PRODUCT_NAME@ for an unknown reason.";
     private static final Pattern LOG_TIMESTAMP = Pattern.compile(
             "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\s+");
@@ -28,12 +31,14 @@ final class StartupDiagnostics {
         try {
             ActivityManager manager = activity.getSystemService(ActivityManager.class);
             List<ApplicationExitInfo> exits = manager.getHistoricalProcessExitReasons(
-                    activity.getPackageName(), 0, 1);
-            if (exits.isEmpty()) return false;
-            ApplicationExitInfo exit = exits.get(0);
-            if (!activity.getApplicationInfo().processName.equals(exit.getProcessName())) return false;
+                    activity.getPackageName(), 0, 16);
+            String mainProcess = activity.getApplicationInfo().processName;
+            ApplicationExitInfo exit = latestMainProcessExit(exits, mainProcess);
+            if (exit == null) return false;
+            if (suppressIntentionalNativeTeardown(activity, exit)) return false;
             if (!unexpected(exit.getReason(), exit.getStatus())) return false;
-            android.content.SharedPreferences preferences = activity.getPreferences(0);
+            android.content.SharedPreferences preferences = activity.getSharedPreferences(
+                    DIAGNOSTICS_PREFERENCES, Activity.MODE_PRIVATE);
             if (exit.getTimestamp() <= preferences.getLong("reported-exit", 0)) return false;
             preferences.edit().putLong("reported-exit", exit.getTimestamp()).apply();
             String details = "@PRODUCT_NAME@ @VERSION_NAME@\n" + Build.MANUFACTURER + " "
@@ -42,11 +47,18 @@ final class StartupDiagnostics {
                     + "\n" + exitCause(exit.getReason(), exit.getStatus())
                     + "\n" + exit.getDescription() + "\n"
                     + "Process: " + exit.getProcessName() + " (" + exit.getPid() + ")\n"
-                    + "Exit timestamp: " + exit.getTimestamp() + "\n\n"
-                    + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
+                    + "Exit timestamp: " + exit.getTimestamp() + "\n"
+                    + "Last sampled process memory: RSS=" + exit.getRss() + " kB, PSS=" + exit.getPss() + " kB\n"
+                    + "Android low-memory kill reporting supported: "
+                    + ActivityManager.isLowMemoryKillReportSupported() + "\n\n"
+                    + javaCrashSection(activity, exit)
+                    + caughtFailureSection(activity, "jni-errors.log", "Caught JNI exceptions")
+                    + caughtFailureSection(activity, "bootstrap-errors.log", "Caught setup exceptions")
+                    + caughtFailureSection(activity, "core.log", "Go core log")
+                    + "\n\n" + logTail(new File(activity.getFilesDir(), "data/logs/client.log"));
             AlertDialog dialog = new AlertDialog.Builder(activity)
                     .setTitle("@PRODUCT_NAME@ stopped unexpectedly")
-                    .setMessage("Save report puts this log and any Android crash trace in Downloads.\n\n" + details)
+                    .setMessage("Save report stores the logs and any Android crash trace in Downloads.\n\n" + details)
                     .setPositiveButton("Retry", (which, button) -> retry.run())
                     .setNegativeButton("Save report", null)
                     .setNeutralButton("Copy details", null)
@@ -69,6 +81,55 @@ final class StartupDiagnostics {
         }
     }
 
+    /** Chooses the newest history entry for the app's main process, not an auxiliary process. */
+    static ApplicationExitInfo latestMainProcessExit(
+            List<ApplicationExitInfo> exits, String mainProcess) {
+        if (exits == null || mainProcess == null) return null;
+        for (ApplicationExitInfo exit : exits) {
+            if (exit != null && isMainProcessExit(mainProcess, exit.getProcessName())) return exit;
+        }
+        return null;
+    }
+
+    /** Process identity comparison kept separate so auxiliary-process history is testable. */
+    static boolean isMainProcessExit(String mainProcess, String reportedProcess) {
+        return mainProcess != null && mainProcess.equals(reportedProcess);
+    }
+
+    /** Includes the bounded Java exception saved before the previous process terminated. */
+    private static String javaCrashSection(Activity activity, ApplicationExitInfo exit) {
+        String saved = JavaCrashCapture.readForExit(
+                new File(activity.getFilesDir(), "data/logs/java-crash.log"),
+                exit.getTimestamp(), exit.getPid());
+        return saved.isEmpty() ? "" : "\n\nSaved Java uncaught exception:\n" + saved;
+    }
+
+    /** Appends locally persisted caught JNI and setup exceptions to the next-exit report. */
+    private static String caughtFailureSection(Activity activity, String fileName, String heading) {
+        String saved = RuntimeDiagnostics.readTail(
+                new File(activity.getFilesDir(), "data/logs/" + fileName));
+        return saved.isEmpty() ? "" : "\n\n" + heading + ":\n" + saved;
+    }
+
+    /** Skips the SIGKILL deliberately issued by NativeActivity during orderly teardown. */
+    private static boolean suppressIntentionalNativeTeardown(
+            Activity activity, ApplicationExitInfo exit) {
+        if (exit.getReason() != ApplicationExitInfo.REASON_SIGNALED
+                || exit.getStatus() != android.system.OsConstants.SIGKILL) return false;
+        android.content.SharedPreferences preferences = activity.getSharedPreferences(
+                DIAGNOSTICS_PREFERENCES, Activity.MODE_PRIVATE);
+        long marker = preferences.getLong(INTENTIONAL_TEARDOWN_KEY, 0L);
+        if (!intentionalTeardown(marker, exit.getTimestamp())) return false;
+        preferences.edit().remove(INTENTIONAL_TEARDOWN_KEY).commit();
+        return true;
+    }
+
+    /** A timestamped marker suppresses only a matching, recent process teardown. */
+    static boolean intentionalTeardown(long markerTimestamp, long exitTimestamp) {
+        long elapsed = exitTimestamp - markerTimestamp;
+        return markerTimestamp > 0 && elapsed >= 0 && elapsed <= INTENTIONAL_TEARDOWN_WINDOW_MS;
+    }
+
     /** Only exits with an identified unexpected cause need a recovery dialog. */
     static boolean unexpected(int reason, int status) {
         return !GENERIC_EXIT.equals(exitCause(reason, status));
@@ -89,9 +150,19 @@ final class StartupDiagnostics {
                 if (status != 0) return "@PRODUCT_NAME@ exited after an error.";
                 return GENERIC_EXIT;
             case ApplicationExitInfo.REASON_SIGNALED:
-                if (status != android.system.OsConstants.SIGKILL)
-                    return "@PRODUCT_NAME@ stopped because it received a system signal.";
-                return GENERIC_EXIT;
+                if (status == android.system.OsConstants.SIGKILL)
+                    return "Android ended @PRODUCT_NAME@ with SIGKILL; on some devices this can indicate memory pressure.";
+                return "@PRODUCT_NAME@ stopped because it received a system signal.";
+            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE:
+                return "Android stopped @PRODUCT_NAME@ because of excessive resource usage.";
+            case ApplicationExitInfo.REASON_ANOMALY:
+                return "Android stopped @PRODUCT_NAME@ after a system resource anomaly.";
+            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE:
+                return "Android stopped @PRODUCT_NAME@ because process initialization failed.";
+            case ApplicationExitInfo.REASON_DEPENDENCY_DIED:
+                return "Android stopped @PRODUCT_NAME@ because a required system dependency ended.";
+            case ApplicationExitInfo.REASON_FREEZER:
+                return "Android stopped @PRODUCT_NAME@ because the process freezer terminated it.";
             default:
                 return GENERIC_EXIT;
         }

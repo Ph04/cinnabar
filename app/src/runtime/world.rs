@@ -296,6 +296,8 @@ pub(crate) struct WorldPollInputs<'w, 's> {
 pub(crate) fn reconcile_world_stream_before_physics(
     state: AppWorldState,
     network: Option<Res<NetworkHandle<PackApplication>>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    memory_guard: Option<Res<crate::memory_guard::Runtime>>,
     #[cfg(feature = "acceptance")] mut acceptance: ResMut<AcceptanceRun>,
     upload_budget: Res<ChunkUploadBudget>,
     #[cfg(feature = "acceptance")] model_witness_source: Res<ModelWitnessFileSource>,
@@ -379,8 +381,27 @@ pub(crate) fn reconcile_world_stream_before_physics(
         queue.discard_resource_work();
     }
     // Adds to the between-frames service's work already recorded for this frame.
-    frame_poll.report.accumulate(stream.poll(
+    #[cfg(not(target_arch = "wasm32"))]
+    let mesh_job_budget = memory_guard.as_deref().map_or(
+        upload_budget.max_per_frame,
+        |guard| guard.mesh_job_budget(upload_budget.max_per_frame),
+    );
+    #[cfg(target_arch = "wasm32")]
+    let mesh_job_budget = upload_budget.max_per_frame;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let light_job_budget = memory_guard.as_deref().map_or(
+        chunk_pipeline::WorldStream::DEFAULT_LIGHT_JOB_BUDGET,
+        |guard| guard.light_job_budget(chunk_pipeline::WorldStream::DEFAULT_LIGHT_JOB_BUDGET),
+    );
+    #[cfg(target_arch = "wasm32")]
+    let light_job_budget = chunk_pipeline::WorldStream::DEFAULT_LIGHT_JOB_BUDGET;
+
+    // Keep the normal removal allowance while reducing only new geometry and lighting work.
+    frame_poll.report.accumulate(stream.poll_with_budgets(
         view.eye_translation().to_array(),
+        mesh_job_budget,
+        light_job_budget,
         upload_budget.max_per_frame,
     ));
     (frame_poll.cohort_progress, frame_poll.cohort) = frame_cohort_status(
@@ -659,6 +680,8 @@ pub(crate) fn reconcile_world_stream_before_physics(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drive_world_stream(
     network: Res<NetworkHandle<PackApplication>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    memory_guard: Option<Res<crate::memory_guard::Runtime>>,
     state: AppWorldState,
     #[cfg(feature = "acceptance")] mut acceptance: ResMut<AcceptanceRun>,
     #[cfg(feature = "acceptance")] mut metrics: ResMut<AppMetrics>,
@@ -711,7 +734,22 @@ pub(crate) fn drive_world_stream(
         ui_runtime.clear_disconnected_block_cracks();
         return;
     };
-    let prediction_budget = block_use.prediction_frames.publication_budget(frame.0);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let default_queue_limit = render_scene::ChunkRenderQueueLimits::default().max_bytes;
+        render_queue.limits.max_bytes = memory_guard.as_deref().map_or(
+            default_queue_limit,
+            |guard| guard.render_queue_byte_limit(default_queue_limit),
+        );
+    }
+    let requested_prediction_budget = block_use.prediction_frames.publication_budget(frame.0);
+    #[cfg(not(target_arch = "wasm32"))]
+    let prediction_budget = memory_guard.as_deref().map_or(
+        requested_prediction_budget,
+        |guard| guard.prediction_job_budget(requested_prediction_budget),
+    );
+    #[cfg(target_arch = "wasm32")]
+    let prediction_budget = requested_prediction_budget;
     if prediction_budget != 0 {
         let report =
             stream.poll_prediction_jobs(view.eye_translation().to_array(), prediction_budget);
@@ -800,6 +838,13 @@ pub(crate) fn drive_world_stream(
         })
     });
 
+    #[cfg(not(target_arch = "wasm32"))]
+    let sub_chunk_request_budget = memory_guard
+        .as_deref()
+        .map_or(OUTBOUND_SEND_BUDGET_PER_FRAME, |guard| guard.sub_chunk_request_budget());
+    #[cfg(target_arch = "wasm32")]
+    let sub_chunk_request_budget = OUTBOUND_SEND_BUDGET_PER_FRAME;
+
     let send_error = client_world.stream.as_mut().and_then(|stream| {
         let actor_position = local_physics
             .network_position()
@@ -812,7 +857,7 @@ pub(crate) fn drive_world_stream(
         )?;
         flush_sub_chunk_requests(
             stream,
-            OUTBOUND_SEND_BUDGET_PER_FRAME,
+            sub_chunk_request_budget,
             center,
             |receipt, packet| network.send_sub_chunk_request(receipt, packet),
         )

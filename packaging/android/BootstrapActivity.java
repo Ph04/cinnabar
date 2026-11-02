@@ -62,7 +62,8 @@ public final class BootstrapActivity extends Activity {
                             getApplicationInfo().nativeLibraryDir, current);
                 }
             } catch (Exception error) {
-                result = error.toString();
+                RuntimeDiagnostics.record(this, "BOOTSTRAP_SETUP", error);
+                result = RuntimeDiagnostics.describe(error);
             }
         }
         String outcome = result;
@@ -145,6 +146,11 @@ public final class BootstrapActivity extends Activity {
             }
             progress.setMessage(message);
         });
+    }
+
+    /** Persists JNI failures caught and cleared by the native setup layer. */
+    public void recordJniException(String stage, String details) {
+        RuntimeDiagnostics.recordText(this, "JNI/" + stage, details);
     }
 
     private void finishSetup(String error) {

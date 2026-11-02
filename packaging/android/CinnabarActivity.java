@@ -97,6 +97,11 @@ public final class CinnabarActivity extends NativeActivity {
         }
     }
 
+    /** Persists JNI callback failures originating from the native game thread. */
+    public void recordJniException(String stage, String details) {
+        RuntimeDiagnostics.recordText(this, "JNI/" + stage, details);
+    }
+
     /** Returns bottom system-window obstruction relative to the full native surface. */
     public int bottomObstructionPixels() {
         return bottomObstruction;
@@ -105,6 +110,10 @@ public final class CinnabarActivity extends NativeActivity {
     @Override protected void onDestroy() {
         // The native loop never returns on destroy, which NativeActivity's teardown waits for,
         // and Bevy cannot start twice in one process anyway.
+        getSharedPreferences(StartupDiagnostics.DIAGNOSTICS_PREFERENCES, MODE_PRIVATE)
+                .edit()
+                .putLong("intentional-native-teardown-ms", System.currentTimeMillis())
+                .commit();
         android.os.Process.killProcess(android.os.Process.myPid());
         super.onDestroy();
     }

@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="true" />
     <application
+        android:name=".CinnabarApplication"
         android:label="@PRODUCT_NAME@"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
